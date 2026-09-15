@@ -1,0 +1,97 @@
+# Régénère le catalogue chaque jour et le publie s'il a changé.
+#
+# Les scripts de generator/Scripts interrogent TCGdex, Riftcodex, OPTCG API,
+# Cardmarket et TCGCSV, puis publish_catalog.py met à jour les fichiers servis
+# par GitHub Pages. L'app Ripped les télécharge d'elle-même.
+#
+# Garde-fous :
+# - une source qui ne répond pas → rien n'est publié ce jour-là, le run échoue
+#   (GitHub envoie un e-mail) et on réessaie le lendemain ;
+# - publish_catalog.py refuse une liste qui perdrait une extension, ou une
+#   extension qui perdrait une bonne part de ses cartes ;
+# - une nouvelle extension sans visuel de sachet, ou une rareté inconnue, est
+#   publiée quand même, et un ticket « Catalogue : intervention nécessaire »
+#   est ouvert.
+
+name: Mise à jour du catalogue
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # tous les jours, 5 h 17 UTC
+  workflow_dispatch:        # bouton « Run workflow » dans l'onglet Actions
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Générer le catalogue
+        run: |
+          set -o pipefail
+          mkdir -p generator/Ripped/Models generator/Ripped/Resources
+          for script in generate_catalog generate_riftbound generate_onepiece generate_products; do
+            echo "::group::$script"
+            python3 "generator/Scripts/$script.py" 2>&1 | tee -a "$RUNNER_TEMP/generation.log"
+            echo "::endgroup::"
+          done
+
+      - name: Vérifier que toutes les sources ont répondu
+        run: |
+          if grep -E "! (échec|cartes indisponibles|liste des produits)" "$RUNNER_TEMP/generation.log"; then
+            echo "::error::Une source n'a pas répondu : rien n'est publié aujourd'hui."
+            exit 1
+          fi
+
+      - name: Préparer les fichiers publiés
+        run: python3 generator/Scripts/publish_catalog.py --site .
+
+      - name: Publier si quelque chose a changé
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Rien de nouveau."
+          else
+            git commit -m "Catalogue mis à jour automatiquement"
+            git push
+          fi
+
+      - name: Signaler ce qui demande une intervention
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          touch "$RUNNER_TEMP/generation.log"
+          grep -E "! (sans visuel|rareté inconnue)" "$RUNNER_TEMP/generation.log" > "$RUNNER_TEMP/attention.txt" || true
+          [ -s "$RUNNER_TEMP/attention.txt" ] || exit 0
+
+          title="Catalogue : intervention nécessaire"
+          {
+            echo "La mise à jour automatique a publié le catalogue, mais ces points demandent une modification des scripts (\`generator/Scripts\`) :"
+            echo
+            sed 's/^ *! /- /' "$RUNNER_TEMP/attention.txt"
+            echo
+            echo "Run : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > "$RUNNER_TEMP/body.md"
+
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
