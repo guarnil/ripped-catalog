@@ -199,7 +199,7 @@ def main():
             return
         git("commit", "-m", f"Catalogue : {len(extensions)} extensions")
         git("push")
-        print("Publié. Les apps le récupèrent au plus tard 12 heures après, puis l'affichent au lancement suivant.")
+        print("Publié. Les apps le récupèrent à leur prochaine ouverture (au plus une vérification toutes les 6 heures), puis l'affichent au lancement suivant.")
 
 
 if __name__ == "__main__":
