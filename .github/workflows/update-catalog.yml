@@ -9,7 +9,8 @@
 #   (GitHub envoie un e-mail) et on réessaie le lendemain ;
 # - publish_catalog.py refuse une liste qui perdrait une extension, ou une
 #   extension qui perdrait une bonne part de ses cartes ;
-# - une nouvelle extension sans visuel de sachet, ou une rareté inconnue, est
+# - une extension sans visuel de sachet, une rareté inconnue ou une extension
+#   provisoire impossible à rattacher toute seule sont
 #   publiée quand même, et un ticket « Catalogue : intervention nécessaire »
 #   est ouvert.
 
@@ -57,7 +58,9 @@ jobs:
           fi
 
       - name: Préparer les fichiers publiés
-        run: python3 generator/Scripts/publish_catalog.py --site .
+        run: |
+          set -o pipefail
+          python3 generator/Scripts/publish_catalog.py --site . 2>&1 | tee -a "$RUNNER_TEMP/generation.log"
 
       - name: Publier si quelque chose a changé
         run: |
@@ -77,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           touch "$RUNNER_TEMP/generation.log"
-          grep -E "! (sans visuel|rareté inconnue)" "$RUNNER_TEMP/generation.log" > "$RUNNER_TEMP/attention.txt" || true
+          grep -E "! (sans visuel|rareté inconnue|extension provisoire)" "$RUNNER_TEMP/generation.log" > "$RUNNER_TEMP/attention.txt" || true
           [ -s "$RUNNER_TEMP/attention.txt" ] || exit 0
 
           title="Catalogue : intervention nécessaire"

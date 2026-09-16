@@ -47,6 +47,8 @@ SWIFT_SOURCES = [
     ("Catalog+OnePiece.swift", "onePiece"),
 ]
 
+PENDING = "PendingExtensions.json"
+
 COPIED = [
     "CardIndex.json",
     "CardIndexRiftbound.json",
@@ -117,7 +119,85 @@ def read_swift_catalog():
     return series, extensions
 
 
-def check_not_shrinking(name, table):
+def days_between(a, b):
+    from datetime import date
+    try:
+        x = date(*map(int, a.split("-")))
+        y = date(*map(int, b.split("-")))
+    except (TypeError, ValueError):
+        return 10_000
+    return abs((x - y).days)
+
+
+def resolve_pending(extensions, previous_renames):
+    """Les extensions vendues avant que leurs cartes soient cataloguées.
+
+    `generate_products.py` les repère chez TCGplayer. Trois cas :
+    - son code est déjà celui du catalogue : les cartes sont arrivées, il n'y a
+      plus rien à faire ;
+    - une extension du catalogue, même licence, sortie à moins de dix jours et
+      qui n'est réclamée par personne d'autre : c'est la même, sous son vrai
+      code. On publie le renommage, et l'app renomme l'historique une fois ;
+    - sinon, elle est publiée telle quelle, marquée provisoire : on peut
+      l'ouvrir, et les cartes se compléteront plus tard.
+
+    Rend (extensions provisoires, renommages, points à signaler).
+    """
+    path = os.path.join(RESOURCES, PENDING)
+    if not os.path.exists(path):
+        return [], previous_renames, []
+    with open(path, encoding="utf-8") as f:
+        pending = json.load(f)
+
+    known = {e["code"]: e for e in extensions}
+    renames = dict(previous_renames)
+    provisional, notes = [], []
+
+    for code, candidate in sorted(pending.items()):
+        if code in known or code in renames:
+            continue
+
+        claimed = set(renames.values()) | set(pending)
+        matches = [e for e in extensions
+                   if e["license"] == candidate["license"]
+                   and e["code"] not in claimed
+                   and days_between(e["releaseDate"], candidate["releaseDate"]) <= 10]
+        if len(matches) == 1:
+            renames[code] = matches[0]["code"]
+            continue
+        if len(matches) > 1:
+            notes.append(f"  ! extension provisoire {code} ({candidate['name']}) : "
+                         f"plusieurs correspondances possibles — "
+                         + ", ".join(m["code"] for m in matches))
+
+        # Les paliers de la dernière extension de la même série : une
+        # nouveauté propose presque toujours les mêmes que sa voisine.
+        sibling = next((e for e in extensions
+                        if e["series"] == candidate["series"] and e["license"] == candidate["license"]), None)
+        provisional.append({
+            "code": code,
+            "name": candidate["name"],
+            "series": candidate["series"] if sibling else "HS",
+            "releaseDate": candidate["releaseDate"],
+            "cardCount": 0,
+            "logoURL": "",
+            "main": sibling["main"] if sibling else ["ultra"],
+            "more": sibling["more"] if sibling else [],
+            "license": candidate["license"],
+            "provisional": True,
+        })
+    return provisional, renames, notes
+
+
+def apply_renames(table, renames):
+    """Range les produits d'une extension provisoire sous son vrai code."""
+    for old, new in renames.items():
+        if old in table:
+            table.setdefault(new, {}).update(table.pop(old))
+    return table
+
+
+def check_not_shrinking(name, table, renames=None):
     """Refuse une table qui perdrait une extension, ou une bonne part de ses
     cartes, par rapport à la version publiée.
 
@@ -131,6 +211,7 @@ def check_not_shrinking(name, table):
     with open(previous_path, encoding="utf-8") as f:
         previous = json.load(f)
     for code, entries in previous.items():
+        code = (renames or {}).get(code, code)
         if code not in table:
             sys.exit(f"{name} : l'extension {code} disparaîtrait.")
         before = len(entries) if isinstance(entries, dict) else 0
@@ -165,16 +246,26 @@ def main():
 
     series, extensions = read_swift_catalog()
 
-    # Jamais une extension de moins que la version déjà publiée.
     previous_path = os.path.join(SITE, "extensions.json")
+    previous, previous_renames = set(), {}
     if os.path.exists(previous_path):
         with open(previous_path, encoding="utf-8") as f:
-            previous = {e["code"] for e in json.load(f).get("extensions", [])}
-        lost = sorted(previous - {e["code"] for e in extensions})
-        if lost:
-            sys.exit("Ces extensions disparaîtraient du catalogue publié : " + ", ".join(lost))
+            published = json.load(f)
+        previous = {e["code"] for e in published.get("extensions", [])}
+        previous_renames = published.get("renames", {})
 
-    payload = json.dumps({"series": series, "extensions": extensions},
+    provisional, renames, notes = resolve_pending(extensions, previous_renames)
+    for note in notes:
+        print(note)
+    listed = extensions + provisional
+
+    # Jamais une extension de moins que la version déjà publiée — sauf celle
+    # qui a simplement pris son vrai code, et dont l'app renomme l'historique.
+    lost = sorted(previous - {e["code"] for e in listed} - set(renames))
+    if lost:
+        sys.exit("Ces extensions disparaîtraient du catalogue publié : " + ", ".join(lost))
+
+    payload = json.dumps({"series": series, "extensions": listed, "renames": renames},
                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     hashes = {"extensions.json": write("extensions.json", payload)}
 
@@ -182,7 +273,12 @@ def main():
         with open(os.path.join(RESOURCES, name), "rb") as f:
             data = f.read()
         table = json.loads(data)  # un fichier illisible ne part pas
-        check_not_shrinking(name, table)
+        # Les produits d'une extension provisoire suivent son renommage.
+        if renames:
+            table = apply_renames(table, renames)
+            data = json.dumps(table, ensure_ascii=False, separators=(",", ":"),
+                              sort_keys=True).encode("utf-8")
+        check_not_shrinking(name, table, renames)
         hashes[name] = write(name, data)
 
     manifest = json.dumps({"schema": SCHEMA, "files": hashes}, indent=2, sort_keys=True).encode("utf-8")
@@ -190,7 +286,9 @@ def main():
     # Sans ce fichier, GitHub Pages passe les fichiers dans Jekyll.
     write(".nojekyll", b"")
 
-    print(f"{len(series)} séries, {len(extensions)} extensions, {len(hashes)} fichiers prêts dans CatalogSite/.")
+    print(f"{len(series)} séries, {len(listed)} extensions "
+          f"(dont {len(provisional)} en attente de cartes), "
+          f"{len(renames)} renommages, {len(hashes)} fichiers prêts dans {os.path.basename(SITE) or SITE}.")
 
     if args.push:
         git("add", "-A")

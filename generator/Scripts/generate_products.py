@@ -33,6 +33,8 @@ TCGCSV = "https://tcgcsv.com/tcgplayer"
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "tcgcsv")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = os.path.join(ROOT, "Ripped", "Resources", "Products.json")
+# Les extensions vendues mais dont les cartes ne sont pas encore cataloguées.
+PENDING = os.path.join(ROOT, "Ripped", "Resources", "PendingExtensions.json")
 
 # Les catégories TCGplayer des trois licences.
 CATEGORIES = {"pokemon": 3, "onePiece": 68, "riftbound": 89}
@@ -61,6 +63,9 @@ POKEMON_NAMES = {
 SKIP = ("case", "sleeved", "art bundle", "pokemon center", "exclusive",
         "deck", "decks", "kit", "tin", "tins", "promo", "pre-release", "checklane")
 SKIP_PHRASES = ("[set of",)
+# Groupes TCGplayer à ne jamais prendre pour une extension provisoire.
+PROVISIONAL_SKIP = ("release event", "promo", "exclusives", "miscellaneous",
+                    "tournament", "championship", "pre-release", "prerelease")
 RULES = [
     ("buildBattle", ("build & battle box", "build and battle box")),
     ("bundle",      ("booster bundle",)),
@@ -142,17 +147,73 @@ def item_of(name, license):
     return None
 
 
+def provisional(license, group, code=None):
+    """L'extension que TCGplayer vend déjà, mais que le catalogue de cartes ne
+    connaît pas encore.
+
+    TCGplayer référence une extension dès son annonce ; TCGdex, Riftcodex et
+    l'OPTCG API attendent que les cartes soient saisies, souvent quelques jours
+    après la sortie. Entre les deux, on sait qu'un produit existe, on connaît
+    son nom, sa date et sa photo — assez pour l'ouvrir dans l'app.
+
+    Son code est celui de TCGplayer (« 30C »), faute de mieux : le vrai arrive
+    avec les cartes, et `publish_catalog.py` s'occupe alors du renommage.
+
+    Ne sont retenues que les extensions récentes ou à venir : les vieux groupes
+    sans code (promos, produits divers) n'ont pas à ressortir.
+    """
+    # Une vraie date de sortie est donnée à minuit pile. Les groupes permanents
+    # — « Blister Exclusives », « Miscellaneous Cards & Products » — portent
+    # l'horodatage du miroir TCGCSV, remis à jour chaque nuit : sans ce test,
+    # ils passeraient pour des nouveautés tous les jours.
+    stamp = group.get("publishedOn") or ""
+    if not stamp.endswith("T00:00:00"):
+        return None
+    published = stamp[:10]
+    if published < time.strftime("%Y-%m-%d", time.gmtime(time.time() - 120 * 86400)):
+        return None
+    # Les cartes de tournoi et d'avant-première ne s'ouvrent pas en booster.
+    if any(phrase in group["name"].lower() for phrase in PROVISIONAL_SKIP):
+        return None
+    code = code or re.sub(r"[^A-Z0-9.]", "", (group.get("abbreviation") or "").upper())
+    if not code:
+        return None
+    # Le nom tel qu'il se lira dans l'app : « ME: 30th Celebration » → « 30th
+    # Celebration », la série étant déjà dite à côté.
+    name = re.sub(r"^[A-Z]+\d*:\s*", "", group["name"]).strip()
+    series = {"pokemon": "HS", "onePiece": "OP", "riftbound": "RB"}[license]
+    match = re.match(r"(ME|SV|SWSH)\d*\s*:", group["name"])
+    if license == "pokemon" and match:
+        series = match.group(1)
+    if license == "onePiece":
+        series = (re.match(r"(PRB|EB|OP)", code) or re.match(r"(OP)", "OP")).group(1)
+    return {"code": code, "name": name or group["name"], "series": series,
+            "license": license, "releaseDate": published}
+
+
 def main():
     print("Produits scellés TCGCSV → Products.json")
     catalog = {}
+    pending = {}
 
     for license, category in CATEGORIES.items():
         groups = get(f"{category}/groups", f"groups_{category}.json")["results"]
         found = 0
         for group in groups:
             code = app_code(license, group)
+            candidate = provisional(license, group, code)
             if not code:
-                continue
+                if not candidate:
+                    continue
+                code = candidate["code"]
+            # Candidates d'extension récente : `publish_catalog.py` écartera
+            # celles que le catalogue de cartes connaît déjà. Deux groupes
+            # peuvent partager un code — la boîte et sa collection : on garde
+            # le nom le plus court, celui de l'extension elle-même.
+            if candidate:
+                known = pending.get(candidate["code"])
+                if not known or len(candidate["name"]) < len(known["name"]):
+                    pending[candidate["code"]] = candidate
             products = get(f"{category}/{group['groupId']}/products",
                            f"products_{category}_{group['groupId']}.json")["results"]
 
@@ -163,6 +224,12 @@ def main():
                     continue        # le premier trouvé gagne : c'est le produit simple
                 items[item] = IMAGE.format(id=product["productId"])
             if not items:
+                # Une extension provisoire sans aucun produit scellé n'a rien à
+                # ouvrir. Deux groupes peuvent porter le même code — la boîte et
+                # sa collection : celui qui n'apporte rien ne doit pas effacer
+                # l'autre.
+                if code in pending and code not in catalog:
+                    pending.pop(code, None)
                 continue
 
             entry = catalog.setdefault(code, {"items": {}})
@@ -175,6 +242,10 @@ def main():
 
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     json.dump(catalog, open(OUTPUT, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    json.dump(pending, open(PENDING, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    if pending:
+        print("  en attente de cartes : "
+              + ", ".join(f"{c} ({e['name']}, {e['releaseDate']})" for c, e in sorted(pending.items())))
     packs = sum(1 for e in catalog.values() if "pack" in e)
     items = sum(len(e["items"]) for e in catalog.values())
     print(f"  {len(catalog)} extensions · {packs} sachets · {items} produits "
