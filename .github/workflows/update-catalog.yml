@@ -18,7 +18,15 @@ name: Mise à jour du catalogue
 
 on:
   schedule:
-    - cron: "17 5 * * *"   # tous les jours, 5 h 17 UTC
+    # Quatre passages par jour. GitHub ne garantit pas l'heure d'une tâche
+    # planifiée — elle part en retard quand ses machines sont chargées, et
+    # peut être sautée. Répéter coûte deux minutes de machine et rattrape
+    # l'exécution manquée ; publier deux fois la même chose ne change rien,
+    # puisque rien n'est poussé sans changement.
+    - cron: "17 5 * * *"    # 5 h 17 UTC
+    - cron: "17 11 * * *"   # 11 h 17 UTC
+    - cron: "17 17 * * *"   # 17 h 17 UTC
+    - cron: "17 23 * * *"   # 23 h 17 UTC
   workflow_dispatch:        # bouton « Run workflow » dans l'onglet Actions
 
 permissions:
