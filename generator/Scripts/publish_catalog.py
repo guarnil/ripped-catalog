@@ -189,6 +189,24 @@ def resolve_pending(extensions, previous_renames):
     return provisional, renames, notes
 
 
+def order_by_release(extensions):
+    """La plus récente d'abord, licence par licence.
+
+    L'app lit ce tableau dans l'ordre : c'est lui qui range le sélecteur, et
+    qui désigne l'extension proposée par défaut. Ajoutée en fin de liste, une
+    extension provisoire se retrouverait sous les plus vieilles — invisible là
+    où on l'attend.
+    """
+    licenses = list(dict.fromkeys(e["license"] for e in extensions))
+    ordered = []
+    for license in licenses:
+        block = [e for e in extensions if e["license"] == license]
+        # Sans date, on garde la place que le catalogue lui donne, en fin.
+        block.sort(key=lambda e: e["releaseDate"] or "", reverse=True)
+        ordered += block
+    return ordered
+
+
 def apply_renames(table, renames):
     """Range les produits d'une extension provisoire sous son vrai code."""
     for old, new in renames.items():
@@ -257,7 +275,7 @@ def main():
     provisional, renames, notes = resolve_pending(extensions, previous_renames)
     for note in notes:
         print(note)
-    listed = extensions + provisional
+    listed = order_by_release(extensions + provisional)
 
     # Jamais une extension de moins que la version déjà publiée — sauf celle
     # qui a simplement pris son vrai code, et dont l'app renomme l'historique.
