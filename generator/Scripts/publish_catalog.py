@@ -49,6 +49,19 @@ SWIFT_SOURCES = [
 
 PENDING = "PendingExtensions.json"
 
+# Le logo des extensions annoncées, à la main.
+#
+# Aucune source ne le donne avant que les cartes soient cataloguées : TCGCSV
+# n'a pas d'image de série, et l'adresse TCGdex a besoin du vrai code, qui
+# n'existe pas encore. En attendant, la vignette montre la photo du sachet ;
+# une adresse posée ici la remplace par le logo.
+#
+# Clé : le code provisoire (l'abréviation TCGplayer). Vérifie les droits de
+# l'image avant de l'ajouter — l'app la télécharge telle quelle.
+PENDING_LOGOS = {
+    # "30C": "https://exemple.invalid/30e-anniversaire.png",
+}
+
 COPIED = [
     "CardIndex.json",
     "CardIndexRiftbound.json",
@@ -169,6 +182,9 @@ def resolve_pending(extensions, previous_renames):
             notes.append(f"  ! extension provisoire {code} ({candidate['name']}) : "
                          f"plusieurs correspondances possibles — "
                          + ", ".join(m["code"] for m in matches))
+        if code not in PENDING_LOGOS:
+            notes.append(f"  ! extension provisoire {code} ({candidate['name']}) sans logo — "
+                         f"à ajouter dans PENDING_LOGOS si tu en as un")
 
         # Les paliers de la dernière extension de la même série : une
         # nouveauté propose presque toujours les mêmes que sa voisine.
@@ -180,7 +196,7 @@ def resolve_pending(extensions, previous_renames):
             "series": candidate["series"] if sibling else "HS",
             "releaseDate": candidate["releaseDate"],
             "cardCount": 0,
-            "logoURL": "",
+            "logoURL": PENDING_LOGOS.get(code, ""),
             "main": sibling["main"] if sibling else ["ultra"],
             "more": sibling["more"] if sibling else [],
             "license": candidate["license"],
