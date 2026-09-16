@@ -56,11 +56,21 @@ PENDING = "PendingExtensions.json"
 # n'existe pas encore. En attendant, la vignette montre la photo du sachet ;
 # une adresse posée ici la remplace par le logo.
 #
-# Clé : le code provisoire (l'abréviation TCGplayer). Vérifie les droits de
-# l'image avant de l'ajouter — l'app la télécharge telle quelle.
+# Deux façons de faire, au choix :
+#
+# 1. Déposer l'image dans `CatalogSite/logos/<CODE>.png` — elle est publiée
+#    avec le catalogue, et reprise automatiquement, sans toucher à ce fichier.
+# 2. Pointer une adresse existante dans la table ci-dessous.
+#
+# Clé : le code provisoire (l'abréviation TCGplayer). Dans les deux cas,
+# vérifie les droits de l'image : l'app la télécharge telle quelle, et
+# l'héberger toi-même, c'est la rediffuser.
 PENDING_LOGOS = {
     # "30C": "https://exemple.invalid/30e-anniversaire.png",
 }
+
+# La racine servie par GitHub Pages, pour les logos déposés dans le dépôt.
+SITE_URL = "https://guarnil.github.io/ripped-catalog/"
 
 COPIED = [
     "CardIndex.json",
@@ -142,6 +152,15 @@ def days_between(a, b):
     return abs((x - y).days)
 
 
+def logo_for(code):
+    """L'image déposée dans `logos/` du dépôt, sinon l'adresse de la table,
+    sinon rien — et la vignette montre alors la photo du sachet."""
+    for extension in ("png", "webp", "jpg"):
+        if os.path.exists(os.path.join(SITE, "logos", f"{code}.{extension}")):
+            return f"{SITE_URL}logos/{code}.{extension}"
+    return PENDING_LOGOS.get(code, "")
+
+
 def resolve_pending(extensions, previous_renames):
     """Les extensions vendues avant que leurs cartes soient cataloguées.
 
@@ -182,7 +201,7 @@ def resolve_pending(extensions, previous_renames):
             notes.append(f"  ! extension provisoire {code} ({candidate['name']}) : "
                          f"plusieurs correspondances possibles — "
                          + ", ".join(m["code"] for m in matches))
-        if code not in PENDING_LOGOS:
+        if not logo_for(code):
             notes.append(f"  ! extension provisoire {code} ({candidate['name']}) sans logo — "
                          f"à ajouter dans PENDING_LOGOS si tu en as un")
 
@@ -196,7 +215,7 @@ def resolve_pending(extensions, previous_renames):
             "series": candidate["series"] if sibling else "HS",
             "releaseDate": candidate["releaseDate"],
             "cardCount": 0,
-            "logoURL": PENDING_LOGOS.get(code, ""),
+            "logoURL": logo_for(code),
             "main": sibling["main"] if sibling else ["ultra"],
             "more": sibling["more"] if sibling else [],
             "license": candidate["license"],
