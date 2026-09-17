@@ -93,7 +93,7 @@ jobs:
 
           title="Catalogue : intervention nécessaire"
           {
-            echo "La mise à jour automatique a publié le catalogue, mais ces points demandent une modification des scripts (\`generator/Scripts\`) :"
+            echo "La mise à jour automatique a publié le catalogue. Ces points demandent une intervention — déposer un fichier dans ce dépôt, ou ajuster un script de \`generator/Scripts\` :"
             echo
             sed 's/^ *! /- /' "$RUNNER_TEMP/attention.txt"
             echo
