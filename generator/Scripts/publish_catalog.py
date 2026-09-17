@@ -203,7 +203,8 @@ def resolve_pending(extensions, previous_renames):
                          + ", ".join(m["code"] for m in matches))
         if not logo_for(code):
             notes.append(f"  ! extension provisoire {code} ({candidate['name']}) sans logo — "
-                         f"à ajouter dans PENDING_LOGOS si tu en as un")
+                         f"dépose `logos/{code}.png` dans ce dépôt, ou donne son adresse "
+                         f"dans PENDING_LOGOS. Sans logo, la vignette garde la photo du sachet.")
 
         # Les paliers de la dernière extension de la même série : une
         # nouveauté propose presque toujours les mêmes que sa voisine.
