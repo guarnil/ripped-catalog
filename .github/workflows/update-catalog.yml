@@ -101,8 +101,29 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
 
           existing=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
-          if [ -n "$existing" ]; then
-            gh issue edit "$existing" --body-file "$RUNNER_TEMP/body.md"
-          else
+          if [ -z "$existing" ]; then
             gh issue create --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            exit 0
           fi
+
+          # La liste n'a pas bougé : on ne touche à rien, pour ne pas réveiller
+          # le ticket à chaque passage.
+          gh issue view "$existing" --json body --jq .body > "$RUNNER_TEMP/current.md"
+          sed '$d' "$RUNNER_TEMP/current.md" | sed '/^Run : /d' > "$RUNNER_TEMP/current_points.md"
+          sed '/^Run : /d' "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/new_points.md"
+          if diff -q "$RUNNER_TEMP/current_points.md" "$RUNNER_TEMP/new_points.md" >/dev/null; then
+            echo "Rien de nouveau à signaler."
+            exit 0
+          fi
+
+          # Modifier le corps d'un ticket ne prévient personne : le commentaire,
+          # lui, part en notification.
+          gh issue edit "$existing" --body-file "$RUNNER_TEMP/body.md"
+          {
+            echo "La liste a changé :"
+            echo
+            sed 's/^ *! /- /' "$RUNNER_TEMP/attention.txt"
+            echo
+            echo "Run : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > "$RUNNER_TEMP/comment.md"
+          gh issue comment "$existing" --body-file "$RUNNER_TEMP/comment.md"
