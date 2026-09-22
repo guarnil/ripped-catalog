@@ -16,7 +16,9 @@ On y écrit :
   fichiers Swift générés — ce sont eux qui font foi, l'app compilée et la copie
   publiée ne peuvent donc pas diverger ;
 - les index de rareté, les fiches de cartes et les produits, copiés tels quels
-  depuis `Ripped/Resources/` ;
+  depuis `Ripped/Resources/` — l'index Pokémon reçoit en plus les cartes des
+  extensions que TCGdex ne connaît pas encore, lues chez TCGplayer par
+  `generate_products.py` ;
 - `manifest.json` : l'empreinte SHA-256 de chaque fichier. L'app ne retélécharge
   que ce qui a changé, et rejette un fichier dont l'empreinte ne correspond pas.
 
@@ -48,6 +50,7 @@ SWIFT_SOURCES = [
 ]
 
 PENDING = "PendingExtensions.json"
+PENDING_CARDS = "PendingCards.json"
 
 # Le logo des extensions annoncées, à la main.
 #
@@ -161,6 +164,19 @@ def logo_for(code):
     return PENDING_LOGOS.get(code, "")
 
 
+def pending_cards():
+    """Les cartes des extensions vendues avant d'être cataloguées, relevées
+    chez TCGplayer par `generate_products.py` : code provisoire → index des
+    numéros, nombre de cartes et paliers présents. Vide quand aucune extension
+    n'est en avance sur son catalogue.
+    """
+    path = os.path.join(RESOURCES, PENDING_CARDS)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 def resolve_pending(extensions, previous_renames):
     """Les extensions vendues avant que leurs cartes soient cataloguées.
 
@@ -171,7 +187,9 @@ def resolve_pending(extensions, previous_renames):
       qui n'est réclamée par personne d'autre : c'est la même, sous son vrai
       code. On publie le renommage, et l'app renomme l'historique une fois ;
     - sinon, elle est publiée telle quelle, marquée provisoire : on peut
-      l'ouvrir, et les cartes se compléteront plus tard.
+      l'ouvrir, et, si TCGplayer a déjà saisi ses cartes, la scanner —
+      `PendingCards.json` donne alors son nombre de cartes et ses vrais
+      paliers, là où on en était réduit à ceux de l'extension voisine.
 
     Rend (extensions provisoires, renommages, points à signaler).
     """
@@ -183,6 +201,7 @@ def resolve_pending(extensions, previous_renames):
 
     known = {e["code"]: e for e in extensions}
     renames = dict(previous_renames)
+    cards = pending_cards()
     provisional, notes = [], []
 
     for code, candidate in sorted(pending.items()):
@@ -210,18 +229,27 @@ def resolve_pending(extensions, previous_renames):
         # nouveauté propose presque toujours les mêmes que sa voisine.
         sibling = next((e for e in extensions
                         if e["series"] == candidate["series"] and e["license"] == candidate["license"]), None)
+        # Les paliers lus dans les cartes valent mieux que ceux devinés ; une
+        # extension dont TCGplayer n'a encore saisi aucune carte garde ceux de
+        # sa voisine.
+        read = cards.get(code)
+        fallback_main = sibling["main"] if sibling else ["ultra"]
         provisional.append({
             "code": code,
             "name": candidate["name"],
             "series": candidate["series"] if sibling else "HS",
             "releaseDate": candidate["releaseDate"],
-            "cardCount": 0,
+            "cardCount": read["cardCount"] if read else 0,
             "logoURL": logo_for(code),
-            "main": sibling["main"] if sibling else ["ultra"],
-            "more": sibling["more"] if sibling else [],
+            "main": (read["main"] if read and read["main"] else fallback_main),
+            "more": (read["more"] if read and read["main"] else
+                     (sibling["more"] if sibling else [])),
             "license": candidate["license"],
             "provisional": True,
         })
+        if read:
+            notes.append(f"  · extension provisoire {code} ({candidate['name']}) : "
+                         f"{len(read['index'])} cartes lues chez TCGplayer, scannable.")
     return provisional, renames, notes
 
 
@@ -323,13 +351,24 @@ def main():
                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     hashes = {"extensions.json": write("extensions.json", payload)}
 
+    # Les cartes que TCGplayer a saisies avant TCGdex : elles ne sont pas dans
+    # l'index embarqué — celui-ci ne connaît que le catalogue de cartes — mais
+    # la copie téléchargée les porte, et c'est elle que l'app lit d'abord.
+    cards = pending_cards()
+    extra = {e["code"]: cards[e["code"]]["index"]
+             for e in provisional if e["code"] in cards}
+
     for name in COPIED:
         with open(os.path.join(RESOURCES, name), "rb") as f:
             data = f.read()
         table = json.loads(data)  # un fichier illisible ne part pas
+        if name == "CardIndex.json" and extra:
+            for code, index in extra.items():
+                table.setdefault(code, {}).update(index)
         # Les produits d'une extension provisoire suivent son renommage.
         if renames:
             table = apply_renames(table, renames)
+        if renames or (name == "CardIndex.json" and extra):
             data = json.dumps(table, ensure_ascii=False, separators=(",", ":"),
                               sort_keys=True).encode("utf-8")
         check_not_shrinking(name, table, renames)
@@ -341,7 +380,8 @@ def main():
     write(".nojekyll", b"")
 
     print(f"{len(series)} séries, {len(listed)} extensions "
-          f"(dont {len(provisional)} en attente de cartes), "
+          f"(dont {len(provisional)} en attente de cartes, "
+          f"{len(extra)} déjà scannables), "
           f"{len(renames)} renommages, {len(hashes)} fichiers prêts dans {os.path.basename(SITE) or SITE}.")
 
     if args.push:

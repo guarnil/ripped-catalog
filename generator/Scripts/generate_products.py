@@ -20,6 +20,12 @@ Ce que l'app en fait :
 - **les photos** illustrent la feuille « Tu ouvres quoi ? ».
 
 Les photos sont détourées par l'app : TCGplayer les publie sur fond blanc.
+
+Le même fichier de produits contient les **cartes** de l'extension : toute
+entrée qui porte un « Number » en est une. On s'en sert pour les extensions
+Pokémon que TCGdex ne connaît pas encore (`PendingCards.json`) : c'est ce qui
+rend une nouveauté scannable dès sa sortie, sans attendre que le catalogue de
+cartes la saisisse. Voir `provisional()` et `Scripts/publish_catalog.py`.
 """
 
 import json
@@ -35,6 +41,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = os.path.join(ROOT, "Ripped", "Resources", "Products.json")
 # Les extensions vendues mais dont les cartes ne sont pas encore cataloguées.
 PENDING = os.path.join(ROOT, "Ripped", "Resources", "PendingExtensions.json")
+# Et leurs cartes, quand TCGplayer les publie avant le catalogue de cartes.
+PENDING_CARDS = os.path.join(ROOT, "Ripped", "Resources", "PendingCards.json")
 
 # Les catégories TCGplayer des trois licences.
 CATEGORIES = {"pokemon": 3, "onePiece": 68, "riftbound": 89}
@@ -53,6 +61,40 @@ POKEMON_NAMES = {
     "Shining Fates": "SWSH4.5",
     "Champion's Path": "SWSH3.5",
     "ME: Ascended Heroes": "ME02.5",
+
+    # Avant Épée et Bouclier, TCGplayer nomme les groupes sans numéro
+    # (« SM - Unified Minds ») : tout le bloc se lit donc ici. Les
+    # correspondances sont établies par date de sortie, identique de part et
+    # d'autre — sauf Duo de Choc, daté du 31/01 chez TCGdex et du 01/02 ici.
+    "SM Base Set": "SM1",
+    "SM - Guardians Rising": "SM2",
+    "SM - Burning Shadows": "SM3",
+    "Shining Legends": "SM3.5",
+    "SM - Crimson Invasion": "SM4",
+    "SM - Ultra Prism": "SM5",
+    "SM - Forbidden Light": "SM6",
+    "SM - Celestial Storm": "SM7",
+    "Dragon Majesty": "SM7.5",
+    "SM - Lost Thunder": "SM8",
+    "SM - Team Up": "SM9",
+    "SM - Unbroken Bonds": "SM10",
+    "SM - Unified Minds": "SM11",
+    "Hidden Fates": "SM115",        # l'identifiant TCGdex de SM11.5
+    "SM - Cosmic Eclipse": "SM12",
+
+    "Kalos Starter Set": "XY0",
+    "XY Base Set": "XY1",
+    "XY - Flashfire": "XY2",
+    "XY - Furious Fists": "XY3",
+    "XY - Phantom Forces": "XY4",
+    "XY - Primal Clash": "XY5",
+    "XY - Roaring Skies": "XY6",
+    "XY - Ancient Origins": "XY7",
+    "XY - BREAKthrough": "XY8",
+    "XY - BREAKpoint": "XY9",
+    "XY - Fates Collide": "XY10",
+    "XY - Steam Siege": "XY11",
+    "XY - Evolutions": "XY12",
 }
 
 # Nom du produit → item de l'app, dans l'ordre d'examen : la première règle qui
@@ -82,10 +124,18 @@ RULES = [
 IMAGE = "https://tcgplayer-cdn.tcgplayer.com/product/{id}_in_1000x1000.jpg"
 
 
-def get(path, cache_name):
+# TCGCSV est repris du catalogue TCGplayer chaque nuit. Une extension ancienne
+# n'y bouge plus : son fichier reste en cache indéfiniment. Ce qui bouge — la
+# liste des groupes, et les cartes d'une extension qui vient d'être annoncée,
+# saisies au fil des jours — est repris au plus une fois par jour.
+DAY = 86400
+
+
+def get(path, cache_name, max_age=None):
     os.makedirs(CACHE, exist_ok=True)
     cached = os.path.join(CACHE, cache_name)
-    if os.path.exists(cached):
+    if os.path.exists(cached) and (max_age is None
+                                   or time.time() - os.path.getmtime(cached) < max_age):
         return json.load(open(cached))
     for attempt in range(3):
         try:
@@ -147,6 +197,111 @@ def item_of(name, license):
     return None
 
 
+# Raretés TCGplayer → paliers de l'app, jumelle de `RARITY_TIERS` dans
+# generate_catalog.py. Les deux sources emploient le même vocabulaire, à la
+# casse près : TCGplayer écrit « Double Rare », TCGdex « Double rare ».
+#
+# Contrôlé sur quatre extensions cataloguées des deux côtés — ME01, ME02, SV10
+# et SV151, 769 cartes — sans une divergence, ni de numéro ni de palier.
+#
+# Trois libellés propres à 30th Celebration sont rattachés au palier le plus
+# proche, faute d'équivalent dans l'app : « Pikachu Rare » (les trente Pikachu
+# d'artistes, numérotés dans l'extension) à l'illustration, « Futuristic Rare »
+# aux dorées, « RBG Rare » (les trois Mew B/G/R) aux secrètes.
+#
+# Le palier `v` n'y figure pas : TCGplayer range les V, VMAX et VSTAR en
+# « Ultra Rare », sans les distinguer. Sans conséquence ici — ce bloc est clos
+# depuis 2022, et seules les extensions à venir passent par cette table.
+POKEMON_TIERS = {
+    "doubleRare":          ("Double Rare",),
+    "illustration":        ("Illustration Rare", "Pikachu Rare"),
+    "specialIllustration": ("Special Illustration Rare",),
+    "ultra":               ("Ultra Rare",),
+    "secret":              ("Secret Rare", "Rainbow Rare", "RBG Rare"),
+    "hyper":               ("Hyper Rare", "Futuristic Rare"),
+    "megaHyper":           ("Mega Hyper Rare",),
+    "megaAttack":          ("Mega Attack Rare",),
+    "ace":                 ("ACE SPEC Rare",),
+    "shiny":               ("Shiny Rare", "Shiny Ultra Rare", "Shiny Holo Rare",
+                            "Radiant Rare", "Amazing Rare"),
+}
+
+# Raretés de base : présentes dans chaque booster, ce ne sont pas des « hits ».
+POKEMON_BASE = {"Common", "Uncommon", "Rare", "Holo Rare", "Promo", "None", None}
+
+# Libellés connus mais que l'app ne suit pas : pas de signalement. Les deux
+# premiers sont ceux de generate_catalog.py ; les suivants ne concernent que
+# des blocs anciens, déjà catalogués par TCGdex.
+POKEMON_UNTRACKED = {"Black White Rare", "Classic Collection", "Prism Rare", "Rare BREAK"}
+
+# L'ordre d'affichage des paliers, comme dans generate_catalog.py : les trois
+# premiers présents sont mis en avant, le reste passe derrière « voir plus ».
+TIER_ORDER = ["doubleRare", "illustration", "specialIllustration", "v",
+              "ultra", "secret", "hyper", "megaHyper", "megaAttack", "ace", "shiny"]
+
+UNKNOWN_SEEN = set()
+
+
+def tier_of(rarity_name):
+    """Le palier de l'app pour un libellé TCGplayer, ou None si c'est une base."""
+    if rarity_name in POKEMON_BASE:
+        return None
+    for tier, labels in POKEMON_TIERS.items():
+        if rarity_name in labels:
+            return tier
+    if rarity_name not in UNKNOWN_SEEN | POKEMON_UNTRACKED:
+        # Non bloquant : la carte est simplement rangée en « autre ».
+        UNKNOWN_SEEN.add(rarity_name)
+        print(f"  ! rareté inconnue « {rarity_name} » — à ajouter dans POKEMON_TIERS")
+    return "other"
+
+
+def cards_of(products):
+    """Les cartes d'une extension, lues dans son fichier de produits.
+
+    Seules les entrées qui portent un « Number » sont des cartes : tout le
+    reste, ce sont les produits scellés et les cartes-code.
+
+    Rend l'index numéro → palier au format de `CardIndex.json`, le nombre de
+    cartes officielles et les paliers réellement présents.
+
+    Les clés suivent `CardIndex.normalize` côté app : le numérateur seul, sans
+    zéros de tête — « 021/128 » → « 21 ».
+
+    Un numérateur qui n'est pas un nombre garde le numéro imprimé en entier :
+    les trois Mew de 30th Celebration sont « B/RGB », « G/RGB » et « R/RGB ».
+    Leur dénominateur commun en fait une souche pour `CardIndex.stem`, donc
+    des variantes les unes des autres : le scan n'a plus qu'à reconnaître
+    « /RGB » pour que l'app propose les trois d'un tap — la lettre, seule
+    chose qui les distingue, se lit mal.
+    """
+    index, official, present = {}, 0, set()
+    for product in products:
+        fields = {e["name"]: e["value"] for e in product.get("extendedData", [])}
+        printed = fields.get("Number")
+        if not printed:
+            continue
+        number, _, total = printed.partition("/")
+        if total.isdigit():
+            # Le dénominateur imprimé : le nombre de cartes de l'extension,
+            # que TCGCSV ne donne nulle part ailleurs. Les secrètes le
+            # dépassent (« 157/128 ») sans le changer.
+            official = max(official, int(total))
+        key = number.strip().upper()
+        if key[:1].isdigit():
+            key = key.lstrip("0") or "0"
+        elif total:
+            key = f"{key}/{total.strip().upper()}"
+        tier = tier_of(fields.get("Rarity"))
+        # Le premier trouvé gagne, comme pour les produits scellés.
+        index.setdefault(key, tier or "base")
+        if tier and tier != "other":
+            present.add(tier)
+    ordered = [t for t in TIER_ORDER if t in present]
+    return {"index": index, "cardCount": official,
+            "main": ordered[:3], "more": ordered[3:]}
+
+
 def provisional(license, group, code=None):
     """L'extension que TCGplayer vend déjà, mais que le catalogue de cartes ne
     connaît pas encore.
@@ -195,9 +350,10 @@ def main():
     print("Produits scellés TCGCSV → Products.json")
     catalog = {}
     pending = {}
+    pending_cards = {}
 
     for license, category in CATEGORIES.items():
-        groups = get(f"{category}/groups", f"groups_{category}.json")["results"]
+        groups = get(f"{category}/groups", f"groups_{category}.json", max_age=DAY)["results"]
         found = 0
         for group in groups:
             code = app_code(license, group)
@@ -214,8 +370,23 @@ def main():
                 known = pending.get(candidate["code"])
                 if not known or len(candidate["name"]) < len(known["name"]):
                     pending[candidate["code"]] = candidate
+            # Une extension provisoire se complète jour après jour chez
+            # TCGplayer, qui saisit ses cartes au fil de l'eau : son fichier
+            # n'est gardé qu'une journée.
             products = get(f"{category}/{group['groupId']}/products",
-                           f"products_{category}_{group['groupId']}.json")["results"]
+                           f"products_{category}_{group['groupId']}.json",
+                           max_age=DAY if candidate else None)["results"]
+
+            # Les cartes d'une extension que le catalogue ne connaît pas
+            # encore. Les groupes supplémentaires sont écartés : la collection
+            # Classic de 30th Celebration porte le code de l'extension, mais
+            # ses cartes gardent le numéro de leur set d'origine (« 4/102 »),
+            # qui se confondrait avec celui de l'extension elle-même.
+            if (candidate and license == "pokemon" and not group.get("isSupplemental")
+                    and pending.get(code) is candidate):
+                read = cards_of(products)
+                if read["index"]:
+                    pending_cards[code] = read
 
             items = {}
             for product in products:
@@ -230,6 +401,7 @@ def main():
                 # l'autre.
                 if code in pending and code not in catalog:
                     pending.pop(code, None)
+                    pending_cards.pop(code, None)
                 continue
 
             entry = catalog.setdefault(code, {"items": {}})
@@ -243,9 +415,16 @@ def main():
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     json.dump(catalog, open(OUTPUT, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
     json.dump(pending, open(PENDING, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    pending_cards = {c: v for c, v in pending_cards.items() if c in pending}
+    json.dump(pending_cards, open(PENDING_CARDS, "w"), separators=(",", ":"),
+              ensure_ascii=False, sort_keys=True)
     if pending:
         print("  en attente de cartes : "
               + ", ".join(f"{c} ({e['name']}, {e['releaseDate']})" for c, e in sorted(pending.items())))
+    for code, read in sorted(pending_cards.items()):
+        print(f"    {code} : {len(read['index'])} cartes lues chez TCGplayer "
+              f"({read['cardCount']} officielles) · "
+              + ", ".join(read["main"] + read["more"]))
     packs = sum(1 for e in catalog.values() if "pack" in e)
     items = sum(len(e["items"]) for e in catalog.values())
     print(f"  {len(catalog)} extensions · {packs} sachets · {items} produits "

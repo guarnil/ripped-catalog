@@ -34,7 +34,7 @@ OUTPUT = os.path.join(ROOT, "Ripped", "Models", "Catalog+Generated.swift")
 CARD_INDEX = os.path.join(ROOT, "Ripped", "Resources", "CardIndex.json")
 
 # Séries suivies, dans l'ordre d'affichage du sélecteur.
-SERIES_ORDER = ["me", "sv", "swsh"]
+SERIES_ORDER = ["me", "sv", "swsh", "sm", "xy"]
 
 # Les paliers de l'app, et les libellés que l'API leur associe.
 # C'est la seule table à toucher quand une extension introduit une rareté
@@ -81,7 +81,9 @@ CARD_OVERRIDES = {
 }
 
 # Sets à écarter : produits qui ne s'ouvrent pas en booster à part entière.
-SKIP = {"sve", "mee", "swsh4.5sv"}          # decks d'énergies, Shiny Vault
+SKIP = {"sve", "mee", "swsh4.5sv",          # decks d'énergies, Shiny Vault
+        "sma",                              # Coffre Étincelant (Shiny Vault de SM11.5)
+        "xya"}                              # « carte alternative A Jaune », 6 cartes
 SKIP_SUFFIXES = ("tg", "gg")                # sous-collections (galeries)
 
 
