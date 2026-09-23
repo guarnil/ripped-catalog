@@ -158,10 +158,21 @@ def days_between(a, b):
 
 def logo_for(code):
     """L'image déposée dans `logos/` du dépôt, sinon l'adresse de la table,
-    sinon rien — et la vignette montre alors la photo du sachet."""
+    sinon rien — et la vignette montre alors la photo du sachet.
+
+    L'adresse porte l'empreinte du fichier. Sans elle, remplacer une image
+    sans changer son nom ne changeait pas son adresse, et les apps qui
+    l'avaient déjà en cache gardaient l'ancienne indéfiniment : le logo du
+    ME06, détouré dans ce dépôt, restait blanc sur les téléphones. L'empreinte
+    fait de chaque version une adresse distincte, donc une entrée de cache
+    distincte, et la correction arrive toute seule.
+    """
     for extension in ("png", "webp", "jpg"):
-        if os.path.exists(os.path.join(SITE, "logos", f"{code}.{extension}")):
-            return f"{SITE_URL}logos/{code}.{extension}"
+        path = os.path.join(SITE, "logos", f"{code}.{extension}")
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                stamp = hashlib.sha256(f.read()).hexdigest()[:8]
+            return f"{SITE_URL}logos/{code}.{extension}?v={stamp}"
     return PENDING_LOGOS.get(code, "")
 
 
