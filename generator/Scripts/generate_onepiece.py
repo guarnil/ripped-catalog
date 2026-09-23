@@ -41,6 +41,7 @@ rien — c'est justement qu'elles valent à peu près la même chose.
 
 import collections
 import json
+import math
 import os
 import re
 import sys
@@ -210,8 +211,53 @@ def display_name(name):
     return re.sub(r"\s*\([^)]*\)", "", name).strip()
 
 
-def match_products(cards, products, price_of):
-    """clé de carte → idProduct, par rang de prix au sein d'un même code."""
+def price_rank(price):
+    """Le prix ramené à un palier, en tiers de décade (facteur 2,15).
+
+    Trier sur le prix brut faisait dépendre le rang de quelques centimes :
+    deux parallèles à 0,04 € et 0,05 € s'inversaient d'un jour à l'autre, et
+    leurs identifiants Cardmarket permutaient. Or ce qui distingue vraiment
+    deux variantes se compte en ordres de grandeur : le palier garde ces
+    écarts-là et ignore le bruit. À palier égal, une clé fixe départage, pour
+    que l'ordre ne doive plus rien au cours du jour.
+    """
+    return round(math.log10(max(price, 0.01)) * 3)
+
+
+def previous_pairing():
+    """L'appariement de la dernière génération : il fait foi tant que
+    Cardmarket n'a pas bougé.
+
+    Deux endroits possibles, parce que le script tourne dans deux contextes.
+    Dans le dépôt de l'app, il écrit et relit `Ripped/Resources/`. Dans la
+    tâche planifiée du dépôt publié, ce dossier est recréé vide à chaque
+    passage : la seule trace du passage précédent est le fichier déjà publié,
+    posé à côté de `generator/`. Sans ce second chemin, la tâche repartirait
+    chaque nuit sans ancrage — et l'appariement se remettrait à permuter, ce
+    qui est exactement ce qu'on cherchait à arrêter.
+    """
+    beside_generator = os.path.join(ROOT, os.pardir, os.path.basename(CARD_DETAILS))
+    for path in (CARD_DETAILS, beside_generator):
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle)
+    return {}
+
+
+def match_products(cards, products, price_of, previous=None):
+    """clé de carte → idProduct, par rang de prix au sein d'un même code.
+
+    L'appariement déjà publié fait foi tant qu'il tient : mêmes produits, un
+    par variante, aucun doublon. Le recalculer à chaque passage sur les cours
+    du jour faisait permuter une poignée d'identifiants à chaque publication —
+    sans rien changer aux cotes, puisque ces variantes-là valent à peu près la
+    même chose, mais en réécrivant le fichier, donc en le faisant retélécharger
+    à toutes les apps pour rien.
+
+    On ne rejoue l'appariement que si Cardmarket a bougé : un tirage de plus,
+    un produit retiré, un identifiant inconnu.
+    """
+    previous = previous or {}
     groups = collections.defaultdict(list)
     for product in products:
         found = CODE.search(product["name"])
@@ -222,7 +268,7 @@ def match_products(cards, products, price_of):
     for card in cards:
         by_code[card_key(card).split("_")[0]].append(card)
 
-    matched, ambiguous = {}, 0
+    matched, ambiguous, kept = {}, 0, 0
     for code, group in by_code.items():
         candidates = groups.get(code, [])
         if not candidates:
@@ -230,11 +276,23 @@ def match_products(cards, products, price_of):
         if len(candidates) != len(group):
             ambiguous += 1
             continue
-        group = sorted(group, key=lambda c: c.get("market_price") or 0)
-        candidates = sorted(candidates, key=lambda p: price_of(p["idProduct"]))
+
+        keys = [card_key(card) for card in group]
+        already = {key: previous.get(key, {}).get("cm") for key in keys}
+        available = {product["idProduct"] for product in candidates}
+        if (all(already[key] in available for key in keys)
+                and len(set(already.values())) == len(keys)):
+            matched.update(already)
+            kept += len(keys)
+            continue
+
+        group = sorted(group, key=lambda c: (price_rank(c.get("market_price") or 0),
+                                             card_key(c)))
+        candidates = sorted(candidates, key=lambda p: (price_rank(price_of(p["idProduct"])),
+                                                       p["idProduct"]))
         for card, product in zip(group, candidates):
             matched[card_key(card)] = product["idProduct"]
-    return matched, ambiguous
+    return matched, ambiguous, kept
 
 
 def swift_string(value):
@@ -255,6 +313,9 @@ def main():
         return line.get("trend") or line.get("avg") or line.get("low") or 0
 
     print(f"  {len(cards)} cartes OPTCG, {len(products)} produits Cardmarket")
+
+    published = previous_pairing()
+
     art = pack_art()
     print(f"  {len(art)} visuels de sachet sur le site officiel")
     dates = release_dates()
@@ -267,6 +328,7 @@ def main():
             codes_by_expansion[product["idExpansion"]].add(found.group(1))
 
     entries, index, details = [], {}, {}
+    reused = rematched = 0
     for set_info in sets:
         code = app_code(set_info["set_id"])
         set_cards = [c for c in cards if c["set_id"] == set_info["set_id"]]
@@ -277,7 +339,10 @@ def main():
         codes = {c["card_set_id"] for c in set_cards}
         expansion = max(codes_by_expansion, key=lambda e: len(codes & codes_by_expansion[e]))
         expansion_products = [p for p in products if p["idExpansion"] == expansion]
-        matched, ambiguous = match_products(set_cards, expansion_products, price_of)
+        matched, ambiguous, kept = match_products(set_cards, expansion_products,
+                                                  price_of, published.get(code))
+        reused += kept
+        rematched += len(matched) - kept
 
         # Date de sortie : celle que publie TCGplayer, qui est la bonne.
         # À défaut, la première carte mise en vente sur Cardmarket —
@@ -320,6 +385,8 @@ def main():
               f"Cardmarket {expansion} · hits reliés {priced}/{len(hits)}, {ambiguous} codes ambigus")
 
     entries.sort(key=lambda e: e["release"], reverse=True)
+    print(f"  appariement Cardmarket : {reused} cartes reprises telles quelles, "
+          f"{rematched} refaites")
 
     lines = [
         "// Généré par Scripts/generate_onepiece.py — ne pas modifier à la main.",

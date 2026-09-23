@@ -47,14 +47,21 @@ RARITY_TIERS = {
     "specialIllustration": ["Special illustration rare"],
     "ultra":               ["Ultra Rare"],
     "secret":              ["Secret Rare"],
-    "hyper":               ["Hyper rare"],
+    # « Futuristic Rare » : les deux dernières du 30ᵉ Anniversaire (157-158),
+    # au-dessus des illustrations spéciales. TCGplayer les donne en Hyper Rare.
+    "hyper":               ["Hyper rare", "Futuristic Rare"],
     "megaHyper":           ["Mega Hyper Rare"],   # bloc Méga-Évolution
     "ace":                 ["ACE SPEC Rare"],
     "shiny":               ["Shiny rare", "Shiny Ultra Rare", "Radiant Rare", "Amazing Rare"],
 }
 
 # Raretés de base : présentes dans chaque booster, ce ne sont pas des « hits ».
-BASE_RARITIES = {"Common", "Uncommon", "Rare", "Holo Rare", "Promo", "None", None}
+# « Pikachu Rare » : les 30 Pikachu costumés du 30ᵉ Anniversaire (023→052).
+# TCGdex leur invente un nom et TCGplayer les compte en Illustration Rare,
+# mais il y en a un dans chaque booster — ce n'est pas un hit, quoi qu'en
+# disent les deux catalogues.
+BASE_RARITIES = {"Common", "Uncommon", "Rare", "Holo Rare", "Promo", "None", None,
+                 "Pikachu Rare"}
 
 # Ordre d'affichage : les trois premiers paliers présents sont mis en avant,
 # le reste passe derrière « voir plus ».
@@ -83,7 +90,12 @@ CARD_OVERRIDES = {
 # Sets à écarter : produits qui ne s'ouvrent pas en booster à part entière.
 SKIP = {"sve", "mee", "swsh4.5sv",          # decks d'énergies, Shiny Vault
         "sma",                              # Coffre Étincelant (Shiny Vault de SM11.5)
-        "xya"}                              # « carte alternative A Jaune », 6 cartes
+        "xya",                              # « carte alternative A Jaune », 6 cartes
+        "30th-c", "cel25cc"}                # Collections Classiques : des réimpressions
+                                            # vendues dans le même produit que
+                                            # l'extension, renumérotées d'après leurs
+                                            # sets d'origine — même statut que les
+                                            # Shiny Vault ci-dessus.
 SKIP_SUFFIXES = ("tg", "gg")                # sous-collections (galeries)
 
 
@@ -174,11 +186,48 @@ def rarities_of(set_id):
     return ordered[:3], ordered[3:]
 
 
+# Quelle série possède quelle extension, d'après l'API. Rempli au démarrage
+# par `load_set_series()`.
+SET_SERIES = {}
+
+
+def load_set_series():
+    """Lit l'appartenance réelle de chaque extension à sa série.
+
+    Le préfixe de l'identifiant ne suffit pas : `30th`, `cel25`, `det1`, `dc1`
+    et `g1` appartiennent bien à une série suivie sans en porter le nom. Ils
+    étaient donc écartés en silence, et l'app ne connaissait pas ces
+    extensions — pas de visuel, pas de cote, rien à scanner.
+    """
+    for serie in SERIES_ORDER:
+        detail = fetch(f"series/{serie}")
+        if not detail:
+            continue
+        for entry in detail.get("sets", []):
+            SET_SERIES[entry["id"].lower()] = serie
+
+
 def era_of(set_id):
+    known = SET_SERIES.get(set_id.lower())
+    if known:
+        return known
+    # Repli sur le préfixe, si la série n'a pas pu être lue.
     for era in SERIES_ORDER:
         if set_id.lower().startswith(era):
             return era
     return None
+
+
+def conventional_logo(set_id, era):
+    """L'adresse que TCGdex sert pour toutes ses extensions.
+
+    Son API rend parfois `logo: null` alors que l'image est bien en ligne —
+    c'est le cas du 30ᵉ Anniversaire, dont le `logo.png` répond 200. Plutôt
+    que de laisser l'app sans visuel, on écrit l'adresse conventionnelle :
+    elle essaie `.webp` puis `.png`, et retombe sur son halo si les deux
+    manquent — exactement ce qu'elle faisait faute d'adresse.
+    """
+    return f"https://assets.tcgdex.net/fr/{era}/{set_id.lower()}/logo"
 
 
 def is_promo(set_id):
@@ -195,6 +244,7 @@ def rarity_list(names):
 
 def main():
     print("Catalogue TCGdex → Swift")
+    load_set_series()
     index = fetch("sets")
     if index is None:
         sys.exit("impossible de lire la liste des extensions")
@@ -229,7 +279,7 @@ def main():
             "release": detail.get("releaseDate") or "",
             "cards": detail.get("cardCount", {}).get("official") or 0,
             # URL de base, sans extension : TCGdex sert .webp (pas toujours) et .png
-            "logo": detail.get("logo") or "",
+            "logo": detail.get("logo") or conventional_logo(set_id, era),
             "main": main_rarities,
             "more": more_rarities,
         })

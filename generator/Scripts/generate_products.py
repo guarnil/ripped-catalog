@@ -43,6 +43,7 @@ OUTPUT = os.path.join(ROOT, "Ripped", "Resources", "Products.json")
 PENDING = os.path.join(ROOT, "Ripped", "Resources", "PendingExtensions.json")
 # Et leurs cartes, quand TCGplayer les publie avant le catalogue de cartes.
 PENDING_CARDS = os.path.join(ROOT, "Ripped", "Resources", "PendingCards.json")
+CLASSIC_CARDS = os.path.join(ROOT, "Ripped", "Resources", "ClassicCards.json")
 
 # Les catégories TCGplayer des trois licences.
 CATEGORIES = {"pokemon": 3, "onePiece": 68, "riftbound": 89}
@@ -214,7 +215,7 @@ def item_of(name, license):
 # depuis 2022, et seules les extensions à venir passent par cette table.
 POKEMON_TIERS = {
     "doubleRare":          ("Double Rare",),
-    "illustration":        ("Illustration Rare", "Pikachu Rare"),
+    "illustration":        ("Illustration Rare",),
     "specialIllustration": ("Special Illustration Rare",),
     "ultra":               ("Ultra Rare",),
     "secret":              ("Secret Rare", "Rainbow Rare", "RBG Rare"),
@@ -224,20 +225,25 @@ POKEMON_TIERS = {
     "ace":                 ("ACE SPEC Rare",),
     "shiny":               ("Shiny Rare", "Shiny Ultra Rare", "Shiny Holo Rare",
                             "Radiant Rare", "Amazing Rare"),
+    "classic":             ("Classic Collection",),
 }
 
 # Raretés de base : présentes dans chaque booster, ce ne sont pas des « hits ».
-POKEMON_BASE = {"Common", "Uncommon", "Rare", "Holo Rare", "Promo", "None", None}
+# « Pikachu Rare » : un par booster dans le 30ᵉ Anniversaire. Voir la note
+# jumelle sur BASE_RARITIES dans generate_catalog.py.
+POKEMON_BASE = {"Common", "Uncommon", "Rare", "Holo Rare", "Promo", "None", None,
+                "Pikachu Rare"}
 
 # Libellés connus mais que l'app ne suit pas : pas de signalement. Les deux
 # premiers sont ceux de generate_catalog.py ; les suivants ne concernent que
 # des blocs anciens, déjà catalogués par TCGdex.
-POKEMON_UNTRACKED = {"Black White Rare", "Classic Collection", "Prism Rare", "Rare BREAK"}
+POKEMON_UNTRACKED = {"Black White Rare", "Prism Rare", "Rare BREAK"}
 
 # L'ordre d'affichage des paliers, comme dans generate_catalog.py : les trois
 # premiers présents sont mis en avant, le reste passe derrière « voir plus ».
 TIER_ORDER = ["doubleRare", "illustration", "specialIllustration", "v",
-              "ultra", "secret", "hyper", "megaHyper", "megaAttack", "ace", "shiny"]
+              "ultra", "secret", "hyper", "megaHyper", "megaAttack", "ace", "shiny",
+              "classic"]
 
 UNKNOWN_SEEN = set()
 
@@ -256,7 +262,23 @@ def tier_of(rarity_name):
     return "other"
 
 
-def cards_of(products):
+def printed_total(products):
+    """Le dénominateur imprimé sur les cartes d'un groupe, 0 à défaut.
+
+    Les secrètes le dépassent sans le changer (« 157/128 »), d'où le max.
+    """
+    total = 0
+    for product in products:
+        for entry in product.get("extendedData", []):
+            if entry["name"] != "Number":
+                continue
+            _, _, printed = (entry["value"] or "").partition("/")
+            if printed.strip().isdigit():
+                total = max(total, int(printed.strip()))
+    return total
+
+
+def cards_of(products, official=None):
     """Les cartes d'une extension, lues dans son fichier de produits.
 
     Seules les entrées qui portent un « Number » sont des cartes : tout le
@@ -275,7 +297,11 @@ def cards_of(products):
     « /RGB » pour que l'app propose les trois d'un tap — la lettre, seule
     chose qui les distingue, se lit mal.
     """
-    index, official, present = {}, 0, set()
+    index, present = {}, set()
+    # `official` donné : les cartes lues viennent d'ailleurs — une
+    # Collection Classique versée dans son extension d'accueil. On garde
+    # alors le dénominateur d'accueil, au lieu de le déduire des cartes.
+    host, official = official, official or 0
     for product in products:
         fields = {e["name"]: e["value"] for e in product.get("extendedData", [])}
         printed = fields.get("Number")
@@ -289,7 +315,13 @@ def cards_of(products):
             official = max(official, int(total))
         key = number.strip().upper()
         if key[:1].isdigit():
-            key = key.lstrip("0") or "0"
+            bare = key.lstrip("0") or "0"
+            # Une réimpression d'époque garde son numéro entier : son
+            # dénominateur, celui de son set d'origine, est le seul
+            # discriminant imprimé entre « 4/102 » et la carte 4 de
+            # l'extension d'accueil.
+            foreign = host and total.strip().isdigit() and int(total) != host
+            key = f"{bare}/{total.strip()}" if foreign else bare
         elif total:
             key = f"{key}/{total.strip().upper()}"
         tier = tier_of(fields.get("Rarity"))
@@ -351,6 +383,10 @@ def main():
     catalog = {}
     pending = {}
     pending_cards = {}
+    # Les Collections Classiques, mises de côté : leurs cartes ne peuvent
+    # être classées qu'une fois connu le dénominateur de leur extension
+    # d'accueil, qui peut se lire après elles.
+    classic_groups, officials, classic_cards = [], {}, {}
 
     for license, category in CATEGORIES.items():
         groups = get(f"{category}/groups", f"groups_{category}.json", max_age=DAY)["results"]
@@ -376,6 +412,16 @@ def main():
             products = get(f"{category}/{group['groupId']}/products",
                            f"products_{category}_{group['groupId']}.json",
                            max_age=DAY if candidate else None)["results"]
+
+            # Une Collection Classique : des réimpressions vendues dans la
+            # même extension, mais numérotées d'après leur set d'origine.
+            # Elles rejoindront l'extension d'accueil, pas une extension à
+            # part : c'est bien du même booster qu'elles sortent.
+            if license == "pokemon":
+                if group.get("isSupplemental"):
+                    classic_groups.append((code, products))
+                else:
+                    officials[code] = max(officials.get(code, 0), printed_total(products))
 
             # Les cartes d'une extension que le catalogue ne connaît pas
             # encore. Les groupes supplémentaires sont écartés : la collection
@@ -412,11 +458,24 @@ def main():
             found += 1
         print(f"  {license:10} {found} extensions reliées")
 
+    for code, products in classic_groups:
+        host = officials.get(code)
+        if not host:
+            print(f"  ! collection classique {code} sans extension d'accueil connue — ignorée")
+            continue
+        read = cards_of(products, official=host)
+        if read["index"]:
+            classic_cards[code] = read["index"]
+            print(f"  collection classique {code} : {len(read['index'])} cartes, "
+                  f"dénominateur d'accueil {host}")
+
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     json.dump(catalog, open(OUTPUT, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
     json.dump(pending, open(PENDING, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
     pending_cards = {c: v for c, v in pending_cards.items() if c in pending}
     json.dump(pending_cards, open(PENDING_CARDS, "w"), separators=(",", ":"),
+              ensure_ascii=False, sort_keys=True)
+    json.dump(classic_cards, open(CLASSIC_CARDS, "w"), separators=(",", ":"),
               ensure_ascii=False, sort_keys=True)
     if pending:
         print("  en attente de cartes : "

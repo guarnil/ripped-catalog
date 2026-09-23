@@ -51,6 +51,7 @@ SWIFT_SOURCES = [
 
 PENDING = "PendingExtensions.json"
 PENDING_CARDS = "PendingCards.json"
+CLASSIC_CARDS = "ClassicCards.json"
 
 # Le logo des extensions annoncées, à la main.
 #
@@ -171,6 +172,27 @@ def pending_cards():
     n'est en avance sur son catalogue.
     """
     path = os.path.join(RESOURCES, PENDING_CARDS)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def classic_cards():
+    """Les réimpressions d'époque vendues dans une extension — la
+    Collection Classique du 30ᵉ Anniversaire — relevées chez TCGplayer par
+    `generate_products.py`.
+
+    Elles ne forment pas une extension à part : elles sortent du même
+    booster, et rejoignent donc l'index de leur extension d'accueil. Leur
+    clé porte le numéro imprimé en entier (« 4/102 »), dénominateur
+    compris, parce que c'est lui — et lui seul — qui les distingue de la
+    carte de même numérateur de l'extension.
+
+    Le code est celui de TCGplayer ; `apply_renames` le fait suivre si
+    l'extension a pris son vrai code entre-temps.
+    """
+    path = os.path.join(RESOURCES, CLASSIC_CARDS)
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as f:
@@ -309,6 +331,41 @@ def write(name, data):
     return hashlib.sha256(data).hexdigest()
 
 
+def sync_generator():
+    """Copie les scripts qui viennent de produire ce catalogue à côté de lui.
+
+    Le dépôt publié porte sa propre copie de `Scripts/`, dont se sert la tâche
+    planifiée. Rien ne la tenait à jour : un correctif apporté ici et non
+    recopié là-bas, et la tâche régénérait chaque nuit un catalogue d'avant —
+    assez pour que le garde-fou « une extension ne doit jamais disparaître »
+    arrête tout, en boucle, jusqu'à ce qu'on remarque les échecs.
+
+    Sans effet quand le script tourne déjà depuis cette copie : dans la tâche
+    planifiée, source et destination sont le même dossier.
+    """
+    source = os.path.dirname(os.path.abspath(__file__))
+    destination = os.path.join(SITE, "generator", "Scripts")
+    if os.path.abspath(source) == os.path.abspath(destination):
+        return 0
+
+    os.makedirs(destination, exist_ok=True)
+    copied = 0
+    for name in sorted(os.listdir(source)):
+        if not name.endswith(".py"):
+            continue
+        with open(os.path.join(source, name), "rb") as f:
+            data = f.read()
+        target = os.path.join(destination, name)
+        if os.path.exists(target):
+            with open(target, "rb") as f:
+                if f.read() == data:
+                    continue
+        with open(target, "wb") as f:
+            f.write(data)
+        copied += 1
+    return copied
+
+
 def git(*args):
     subprocess.run(["git", "-C", SITE, *args], check=True)
 
@@ -347,6 +404,16 @@ def main():
     if lost:
         sys.exit("Ces extensions disparaîtraient du catalogue publié : " + ", ".join(lost))
 
+    # Une extension qui reçoit une Collection Classique doit proposer le
+    # palier à la saisie : le catalogue de cartes, lui, ne connaît pas ces
+    # réimpressions — elles forment un set à part chez TCGdex, écarté exprès.
+    classic = classic_cards()
+    for entry in listed:
+        source = next((old for old, new in renames.items() if new == entry["code"]),
+                      entry["code"])
+        if source in classic and "classic" not in entry["more"]:
+            entry["more"] = entry["more"] + ["classic"]
+
     payload = json.dumps({"series": series, "extensions": listed, "renames": renames},
                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     hashes = {"extensions.json": write("extensions.json", payload)}
@@ -357,6 +424,11 @@ def main():
     cards = pending_cards()
     extra = {e["code"]: cards[e["code"]]["index"]
              for e in provisional if e["code"] in cards}
+
+    # Les Collections Classiques rejoignent l'index de leur extension
+    # d'accueil, provisoire ou non.
+    for code, index in classic_cards().items():
+        extra.setdefault(code, {}).update(index)
 
     for name in COPIED:
         with open(os.path.join(RESOURCES, name), "rb") as f:
@@ -378,6 +450,10 @@ def main():
     write("manifest.json", manifest)
     # Sans ce fichier, GitHub Pages passe les fichiers dans Jekyll.
     write(".nojekyll", b"")
+
+    synced = sync_generator()
+    if synced:
+        print(f"{synced} script(s) de génération recopiés dans le dépôt publié.")
 
     print(f"{len(series)} séries, {len(listed)} extensions "
           f"(dont {len(provisional)} en attente de cartes, "
