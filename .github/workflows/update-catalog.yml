@@ -4,6 +4,11 @@
 # Cardmarket et TCGCSV, puis publish_catalog.py met à jour les fichiers servis
 # par GitHub Pages. L'app Ripped les télécharge d'elle-même.
 #
+# `generate_quotes` est le dernier de la liste : il produit les cotes des
+# cartes Pokémon que TCGdex ne cote pas, et elles se rafraîchissent donc à
+# chaque passage — c'est ce qui les garde justes, un prix vieillissant plus
+# vite qu'une liste d'extensions.
+#
 # Garde-fous :
 # - une source qui ne répond pas → rien n'est publié ce jour-là, le run échoue
 #   (GitHub envoie un e-mail) et on réessaie le lendemain ;
@@ -52,7 +57,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p generator/Ripped/Models generator/Ripped/Resources
-          for script in generate_catalog generate_riftbound generate_onepiece generate_products; do
+          for script in generate_catalog generate_riftbound generate_onepiece generate_products generate_quotes; do
             echo "::group::$script"
             python3 "generator/Scripts/$script.py" 2>&1 | tee -a "$RUNNER_TEMP/generation.log"
             echo "::endgroup::"

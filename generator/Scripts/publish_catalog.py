@@ -85,6 +85,13 @@ COPIED = [
     "Products.json",
 ]
 
+# Publiés sans être embarqués. Une cote vieillit trop vite pour tenir dans un
+# binaire qui ne bouge qu'à chaque version de l'app : elle ne fait que passer
+# par la publication. Absent, le fichier ne bloque rien — l'app se contente
+# alors de TCGdex, comme avant.
+PUBLISHED_ONLY = ["Quotes.json"]
+CONFIG = os.path.join(ROOT, "Config")
+
 
 def string_field(line, name):
     match = re.search(name + r': "((?:[^"\\]|\\.)*)"', line)
@@ -441,8 +448,12 @@ def main():
     for code, index in classic_cards().items():
         extra.setdefault(code, {}).update(index)
 
-    for name in COPIED:
-        with open(os.path.join(RESOURCES, name), "rb") as f:
+    for name in COPIED + PUBLISHED_ONLY:
+        source = os.path.join(CONFIG if name in PUBLISHED_ONLY else RESOURCES, name)
+        if name in PUBLISHED_ONLY and not os.path.exists(source):
+            print(f"  {name} absent : rien à publier (voir Scripts/generate_quotes.py)")
+            continue
+        with open(source, "rb") as f:
             data = f.read()
         table = json.loads(data)  # un fichier illisible ne part pas
         if name == "CardIndex.json" and extra:

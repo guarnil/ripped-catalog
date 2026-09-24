@@ -278,6 +278,33 @@ def printed_total(products):
     return total
 
 
+def card_key(printed, host=None):
+    """La clé d'une carte dans `CardIndex.json`, et son dénominateur imprimé.
+
+    Les clés suivent `CardIndex.normalize` côté app : le numérateur seul, sans
+    zéros de tête — « 021/128 » → « 21 ».
+
+    `host` est le dénominateur de l'extension d'accueil, quand les cartes lues
+    viennent d'ailleurs : une réimpression d'époque garde alors son numéro
+    entier, parce que son dénominateur — celui de son set d'origine — est le
+    seul discriminant imprimé entre « 4/102 » et la carte 4 de l'extension qui
+    l'accueille.
+
+    Extraite pour que `generate_quotes.py` range ses cotes sous exactement les
+    mêmes clés : une cote classée autrement que sa carte ne se retrouve pas.
+    """
+    number, _, total = (printed or "").partition("/")
+    denominator = int(total.strip()) if total.strip().isdigit() else None
+    key = number.strip().upper()
+    if key[:1].isdigit():
+        bare = key.lstrip("0") or "0"
+        foreign = host and denominator is not None and denominator != host
+        key = f"{bare}/{total.strip()}" if foreign else bare
+    elif total:
+        key = f"{key}/{total.strip().upper()}"
+    return key, denominator
+
+
 def cards_of(products, official=None):
     """Les cartes d'une extension, lues dans son fichier de produits.
 
@@ -287,8 +314,7 @@ def cards_of(products, official=None):
     Rend l'index numéro → palier au format de `CardIndex.json`, le nombre de
     cartes officielles et les paliers réellement présents.
 
-    Les clés suivent `CardIndex.normalize` côté app : le numérateur seul, sans
-    zéros de tête — « 021/128 » → « 21 ».
+    Les clés sont posées par `card_key`.
 
     Un numérateur qui n'est pas un nombre garde le numéro imprimé en entier :
     les trois Mew de 30th Celebration sont « B/RGB », « G/RGB » et « R/RGB ».
@@ -307,23 +333,12 @@ def cards_of(products, official=None):
         printed = fields.get("Number")
         if not printed:
             continue
-        number, _, total = printed.partition("/")
-        if total.isdigit():
+        key, total = card_key(printed, host)
+        if total:
             # Le dénominateur imprimé : le nombre de cartes de l'extension,
             # que TCGCSV ne donne nulle part ailleurs. Les secrètes le
             # dépassent (« 157/128 ») sans le changer.
-            official = max(official, int(total))
-        key = number.strip().upper()
-        if key[:1].isdigit():
-            bare = key.lstrip("0") or "0"
-            # Une réimpression d'époque garde son numéro entier : son
-            # dénominateur, celui de son set d'origine, est le seul
-            # discriminant imprimé entre « 4/102 » et la carte 4 de
-            # l'extension d'accueil.
-            foreign = host and total.strip().isdigit() and int(total) != host
-            key = f"{bare}/{total.strip()}" if foreign else bare
-        elif total:
-            key = f"{key}/{total.strip().upper()}"
+            official = max(official, total)
         tier = tier_of(fields.get("Rarity"))
         # Le premier trouvé gagne, comme pour les produits scellés.
         index.setdefault(key, tier or "base")
