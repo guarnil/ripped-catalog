@@ -35,6 +35,12 @@ frankfurter.dev).
 **L'ordre que suit l'app**, lui, ne change pas : la cote Cardmarket de TCGdex
 d'abord, ce fichier seulement quand elle manque.
 
+Chaque cote porte aussi le **visuel** de la carte, pris chez TCGplayer :
+TCGdex ne publie aucune image pour les Collections Classiques, alors que le
+catalogue des produits en a une pour chaque carte — celle de la réimpression,
+pas de l'original qu'elle reprend. Les cartes couchées — BREAK, LEGEND — y
+sont scannées dans leur sens de lecture, donc en paysage.
+
 **Reprendre la main sur une carte.** `Config/QuotesOverride.json` associe un
 numéro imprimé à un **identifiant de produit Cardmarket** — pas à un prix :
 
@@ -69,6 +75,11 @@ OUTPUT = os.path.join(ROOT, "Config", "Quotes.json")
 OVERRIDE = os.path.join(ROOT, "Config", "QuotesOverride.json")
 
 POKEMON = 3
+# Le visuel du produit chez TCGplayer — le même modèle d'adresse que
+# `generate_products.py` utilise pour les photos de sachets. Pour une carte,
+# c'est son scan : celui de la réimpression elle-même, et non de l'original
+# qu'elle reprend.
+IMAGE = "https://tcgplayer-cdn.tcgplayer.com/product/{id}_in_1000x1000.jpg"
 # Le jeu Pokémon chez Cardmarket, pour le guide des prix — le même fichier
 # public que l'app lit déjà pour Riftbound (22) et One Piece (18).
 CARDMARKET_GAME = 6
@@ -227,7 +238,9 @@ def main():
             # d'une même carte partagent son numéro.
             if key in table:
                 continue
-            table[key] = {"n": product["name"], "p": round(price * rate, 2)}
+            table[key] = {"n": product["name"],
+                          "p": round(price * rate, 2),
+                          "i": IMAGE.format(id=product["productId"])}
             found += 1
 
         if not table:
@@ -254,9 +267,8 @@ def main():
                 # un produit retiré : on le dit, et on garde la cote TCGCSV.
                 print(f"  ! {code} {number} : produit Cardmarket {pid} introuvable")
                 continue
-            entry = quotes.setdefault(code, {}).get(number)
-            quotes.setdefault(code, {})[number] = {"n": (entry or {}).get("n", ""),
-                                                   "p": round(price, 2)}
+            entry = quotes.setdefault(code, {}).get(number) or {}
+            quotes.setdefault(code, {})[number] = {**entry, "p": round(price, 2)}
 
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     with open(OUTPUT, "w", encoding="utf-8") as f:
