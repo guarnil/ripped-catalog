@@ -404,12 +404,14 @@ def main():
     series, extensions = read_swift_catalog()
 
     previous_path = os.path.join(SITE, "extensions.json")
-    previous, previous_renames = set(), {}
+    previous, previous_renames, previous_logos = set(), {}, {}
     if os.path.exists(previous_path):
         with open(previous_path, encoding="utf-8") as f:
             published = json.load(f)
         previous = {e["code"] for e in published.get("extensions", [])}
         previous_renames = published.get("renames", {})
+        previous_logos = {e["code"]: e.get("logoURL") or ""
+                          for e in published.get("extensions", [])}
 
     provisional, renames, notes = resolve_pending(extensions, previous_renames)
     for note in notes:
@@ -421,6 +423,24 @@ def main():
     lost = sorted(previous - {e["code"] for e in listed} - set(renames))
     if lost:
         sys.exit("Ces extensions disparaîtraient du catalogue publié : " + ", ".join(lost))
+
+    # Jamais un logo de moins, non plus. Un visuel de sachet est lu sur le site
+    # officiel du jeu, page par page : une page refusée ne se distingue pas
+    # d'une page vide, et la régénération rend alors une extension sans logo
+    # au lieu de s'arrêter. Le garde-fou est ici plutôt que dans chaque script
+    # de génération : la version publiée fait foi, et un logo vide ne veut
+    # jamais dire « celui-ci n'a plus de logo », seulement « pas trouvé cette
+    # fois-ci ».
+    for entry in listed:
+        if entry.get("logoURL"):
+            continue
+        source = next((old for old, new in renames.items() if new == entry["code"]),
+                      entry["code"])
+        kept = previous_logos.get(entry["code"]) or previous_logos.get(source)
+        if kept:
+            entry["logoURL"] = kept
+            print(f"  logo de {entry['code']} repris de la version publiée — "
+                  f"la régénération ne l'a pas trouvé")
 
     # Une extension qui reçoit une Collection Classique doit proposer le
     # palier à la saisie : le catalogue de cartes, lui, ne connaît pas ces

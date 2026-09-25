@@ -126,9 +126,17 @@ def pack_art():
     images sont des WebP détourés de 670 px. Le paramètre de cache (« ?_=… »)
     est retiré : l'adresse nue répond de même, et reste stable d'une
     régénération à l'autre.
+
+    Le nombre de pages est lu dans le pager du site (« 1 / 2 »), et pas déduit
+    de la première page qui ne rend rien : au-delà de la dernière, le site rend
+    une page **sans erreur et sans produit** — exactement ce que rend une page
+    refusée. S'arrêter là-dessus, c'est perdre en silence les visuels des
+    extensions les plus anciennes, qui sont les dernières de la liste. C'est
+    arrivé le 25 septembre 2026 : la tâche planifiée n'a lu que la page 1 et a
+    publié onze extensions sans logo.
     """
-    art, page = {}, 1
-    while page <= 10:
+    art, page, pages = {}, 1, None
+    while page <= (pages or 10):
         cached = os.path.join(CACHE, f"products_{page}.html")
         if os.path.exists(cached):
             html = open(cached).read()
@@ -157,7 +165,15 @@ def pack_art():
             url = image.group(1)
             url = url if url.startswith("http") else SITE + url
             art.setdefault(code.group(1).upper() + code.group(2).zfill(2), url)
+        if pages is None:
+            # « <span class="pageMax">2</span> », dans le pager.
+            announced = re.search(r'class="pageMax"[^>]*>\s*(\d+)', html)
+            pages = int(announced.group(1)) if announced else None
         if not found:
+            if pages:
+                # Le site annonce cette page : elle devrait porter des produits.
+                print(f"  ! liste des produits, page {page} : aucun visuel alors "
+                      f"que le site annonce {pages} pages", file=sys.stderr)
             break
         page += 1
     return art
