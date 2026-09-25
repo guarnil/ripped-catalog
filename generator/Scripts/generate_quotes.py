@@ -61,8 +61,10 @@ normale sur sa version gold.
 
 import json
 import os
+import re
 import sys
 import time
+import unicodedata
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -75,6 +77,9 @@ OUTPUT = os.path.join(ROOT, "Config", "Quotes.json")
 OVERRIDE = os.path.join(ROOT, "Config", "QuotesOverride.json")
 
 POKEMON = 3
+# TCGdex, pour les noms français : le catalogue TCGplayer ne nomme qu'en
+# anglais, et une carte scannée en France porte son nom français.
+TCGDEX = "https://api.tcgdex.net/v2"
 # Le visuel du produit chez TCGplayer — le même modèle d'adresse que
 # `generate_products.py` utilise pour les photos de sachets. Pour une carte,
 # c'est son scan : celui de la réimpression elle-même, et non de l'original
@@ -169,6 +174,66 @@ def price_of(lines):
     return None
 
 
+def tcgdex(path):
+    """Une réponse de TCGdex, ou None. Jamais bloquant : sans elle, les noms
+    restent ceux de TCGplayer, en anglais."""
+    try:
+        request = urllib.request.Request(f"{TCGDEX}/{path}",
+                                         headers={"User-Agent": "Ripped/1.0 (generate_quotes.py)"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except Exception as error:                          # noqa: BLE001
+        print(f"  ! TCGdex {path} : {error}", file=sys.stderr)
+        return None
+
+
+def joinable(name):
+    """Un nom réduit à ce qui se compare d'un catalogue à l'autre.
+
+    TCGplayer précise le tirage entre parenthèses (« Genesect EX (Team
+    Plasma) »), ajoute parfois le numéro à la suite (« Mew - B/RGB ») et garde
+    le niveau (« Palkia LV.X ») que TCGdex laisse tomber.
+    """
+    name = re.sub(r"\s*\([^)]*\)", "", name)
+    name = re.sub(r"\s*-\s*[\w/]+$", "", name)
+    name = re.sub(r"\s*LV\.?\s*X$", "", name, flags=re.IGNORECASE)
+    name = unicodedata.normalize("NFKD", name).lower()
+    return re.sub(r"[^a-z0-9]", "", name)
+
+
+def classic_names(host):
+    """nom anglais → nom français, pour les cartes d'une Collection Classique.
+
+    TCGdex range ces réimpressions dans un set à part, suffixé « -c », qu'il
+    numérote de 1 à 30 : son numéro ne dit donc rien du numéro imprimé
+    (« 19/109 »), et c'est le **nom** qui fait le lien — dans un ensemble de
+    trente cartes, il ne s'y trompe pas. Le set d'accueil est reconnu à son
+    nombre de cartes officielles, celui-là même que les réimpressions portent
+    en dénominateur d'accueil.
+
+    Vide si TCGdex ne répond pas : les noms restent alors en anglais, ce qui
+    est le comportement d'avant.
+    """
+    sets = tcgdex("fr/sets") or []
+    for entry in sets:
+        if (entry.get("cardCount") or {}).get("official") != host:
+            continue
+        french = tcgdex(f"fr/sets/{entry['id']}-c")
+        english = tcgdex(f"en/sets/{entry['id']}-c")
+        if not french or not english:
+            continue
+        by_id = {c["localId"]: c.get("name") for c in french.get("cards") or []}
+        names = {}
+        for card in english.get("cards") or []:
+            translated = by_id.get(card["localId"])
+            if card.get("name") and translated:
+                names.setdefault(joinable(card["name"]), translated)
+        if names:
+            print(f"  {entry['id']}-c : {len(names)} noms français")
+            return names
+    return {}
+
+
 def groups_to_quote(groups):
     """Les groupes qui valent d'être cotés : les Collections Classiques, que
     TCGdex ne cotera jamais, et les extensions assez récentes pour qu'il n'ait
@@ -219,6 +284,9 @@ def main():
     for code, group in selected:
         products, prices = read(group["groupId"])
         host = hosts.get(code) if group.get("isSupplemental") else None
+        # Une Collection Classique : TCGdex ne la cote pas, mais il la nomme,
+        # et en français. C'est le nom qu'on affichera.
+        french = classic_names(host) if host else {}
 
         lines = {}
         for line in prices:
@@ -238,7 +306,7 @@ def main():
             # d'une même carte partagent son numéro.
             if key in table:
                 continue
-            table[key] = {"n": product["name"],
+            table[key] = {"n": french.get(joinable(product["name"]), product["name"]),
                           "p": round(price * rate, 2),
                           "i": IMAGE.format(id=product["productId"])}
             found += 1
