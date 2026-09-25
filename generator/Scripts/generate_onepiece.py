@@ -79,6 +79,36 @@ PRODUCTS = f"{SITE}/products/?subcategory=boosters&page={{page}}"
 
 CODE = re.compile(r"((?:OP|EB|ST|PRB|P)\d*-\d{3})(?:[_-]([a-zA-Z]\d+))?")
 
+# Clé posée sur la carte par `assign_keys`, le temps de la génération : elle ne
+# part pas dans le JSON, seul son contenu devient la clé de l'entrée.
+ASSIGNED = "ripped_key"
+
+# Tirage → suffixe de clé, pour les variantes que l'OPTCG API ne distingue ni
+# par le code ni par l'identifiant d'image (voir `assign_keys`). Deux lettres,
+# comme les suffixes que l'API donne elle-même (« _P1 ») : c'est une clé, pas
+# un libellé — le nom, lui, garde le tirage en clair.
+VARIANT_SUFFIX = {
+    "Parallel": "PL",
+    "Alternate Art": "AA",
+    "Super Alternate Art": "SA",
+    "Full Art": "FA",
+    "Textured Foil": "TF",
+    "Jolly Roger Foil": "JR",
+    "Pirate Foil": "PF",
+    "Pandaman Art": "PM",
+    "Dash Pack": "DP",
+    "Reprint": "RP",
+    "Manga": "MG",
+    "Gold": "GD",
+    "Wanted Poster": "WP",
+    "TR": "TR",
+    "SP": "SP",
+}
+
+# Signalés une fois chacun : un tirage sans suffixe est départagé par un rang,
+# la carte n'est donc pas perdue — mais sa clé se lit moins bien.
+UNKNOWN_VARIANTS = set()
+
 
 def get(url, cache_name):
     os.makedirs(CACHE, exist_ok=True)
@@ -190,10 +220,117 @@ def card_key(card):
 
     Cherché dans l'identifiant d'image plutôt que lu tel quel : quelques
     identifiants OPTCG sont irréguliers (« EB03_OP09-034_p1 », « …_p2.jpg »).
+
+    La clé posée par `assign_keys` prime, quand il y en a une : c'est celle
+    d'une variante que l'identifiant d'image ne distingue pas de sa jumelle.
     """
+    if card.get(ASSIGNED):
+        return card[ASSIGNED]
     match = CODE.search(card["card_image_id"]) or CODE.search(card["card_set_id"])
     code, suffix = match.groups()
     return code + ("_" + suffix.upper() if suffix else "")
+
+
+def variant_marker(name, warn=False):
+    """Le tirage que dit le nom, ou None : « Kingdew (Pandaman Art) » → « PM ».
+
+    Une parenthèse qui porte un numéro (« Kaido (062) ») ou un code
+    (« Marshall.D.Teach - ST17-005 ») ne dit pas un tirage. Beaucoup n'en disent
+    pas non plus : un nom de personnage (« Mr.2 Bon Clay (Bentham) »), une
+    précision de set. D'où `warn`, réservé à `assign_keys` : ailleurs, une
+    parenthèse inconnue est le cas ordinaire et n'a rien à signaler.
+    """
+    for label in reversed(re.findall(r"\(([^)]+)\)", name)):
+        if re.fullmatch(r"\d+", label) or CODE.fullmatch(label):
+            continue
+        if label in VARIANT_SUFFIX:
+            return VARIANT_SUFFIX[label]
+        if warn and label not in UNKNOWN_VARIANTS:
+            UNKNOWN_VARIANTS.add(label)
+            print(f"  ! tirage inconnu « {label} » — à ajouter dans VARIANT_SUFFIX")
+        return None
+    return None
+
+
+def dedupe(set_cards):
+    """Écarte les doublons de l'OPTCG API : deux lignes mot pour mot identiques
+    pour une seule carte (le Gecko Moria d'EB-04).
+
+    Avant tout le reste, parce qu'un doublon fausse un compte : deux lignes face
+    aux deux produits Cardmarket du code — la carte et son parallèle, que l'API
+    ne liste pas — faisaient un groupe apparié, donc une cote tirée au sort
+    entre les deux, qui permutait au fil des cours. Une carte face à deux
+    produits est un groupe ambigu, et c'est le bon verdict : mieux vaut pas de
+    cote qu'une cote prise au parallèle.
+    """
+    seen, unique = set(), []
+    for card in set_cards:
+        signature = (card["card_set_id"], card["card_image_id"],
+                     card["card_name"], card["rarity"])
+        if signature in seen:
+            continue
+        seen.add(signature)
+        unique.append(card)
+    return unique
+
+
+def assign_keys(set_cards):
+    """Départage les cartes d'un set qui tombent sur la même clé.
+
+    L'OPTCG API sert le même code **et le même identifiant d'image** pour
+    certaines variantes : « Kingdew » et « Kingdew (Pandaman Art) » d'OP-17
+    sont deux cartes, deux produits Cardmarket, un seul `OP17-006`. Seule la
+    parenthèse du nom les sépare, et c'est donc elle qui donne le suffixe.
+
+    Sans cela, la seconde était perdue — écartée comme un doublon de la
+    première, donc absente de l'index : un Pandaman Art scanné s'affichait au
+    nom et à la cote de la carte ordinaire, sans variante à proposer. Et
+    l'appariement Cardmarket ne pouvait pas tenir d'un passage à l'autre, deux
+    clés identiques rendant forcément le même identifiant : ces 35 cartes
+    étaient réappariées chaque nuit, et republiées dès qu'un palier de prix
+    changeait.
+
+    La carte dont le nom ne dit aucun tirage garde la clé nue — c'est la carte
+    ordinaire, celle que l'app connaît déjà et que l'historique a enregistrée.
+    Les autres reçoivent le suffixe de leur tirage ; deux tirages de même
+    suffixe, ou aucun nom nu, sont départagés par un rang, sur le nom trié,
+    pour que la clé ne doive rien à l'ordre de la source.
+    """
+    groups = collections.defaultdict(list)
+    for card in set_cards:
+        groups[card_key(card)].append(card)
+
+    assigned = 0
+    for key, group in groups.items():
+        if len(group) < 2 or len({c["card_name"] for c in group}) < 2:
+            continue           # `dedupe` a déjà retiré les lignes identiques
+        ordered = sorted(group, key=lambda c: c["card_name"])
+        markers = {id(c): variant_marker(c["card_name"], warn=True) for c in ordered}
+        # La clé nue reste occupée, toujours : c'est celle qu'un scan rend et
+        # celle que l'historique a enregistrée. La carte sans tirage la prend ;
+        # à défaut — un groupe dont chaque carte est un tirage, comme les deux
+        # Slow-Slow Beam Sword de PRB-02 — la première du tri la garde.
+        bare = next((c for c in ordered if markers[id(c)] is None), ordered[0])
+        bare[ASSIGNED] = key
+        taken, pending = {key}, []
+        for card in ordered:
+            if card is bare:
+                continue
+            marker = markers[id(card)]
+            candidate = f"{key}_{marker}" if marker else None
+            if candidate is None or candidate in taken:
+                pending.append(card)
+                continue
+            taken.add(candidate)
+            card[ASSIGNED] = candidate
+        for card in pending:
+            rank = 2
+            while f"{key}_V{rank}" in taken:
+                rank += 1
+            card[ASSIGNED] = f"{key}_V{rank}"
+            taken.add(card[ASSIGNED])
+        assigned += len(group) - 1
+    return assigned
 
 
 def tier_of(card):
@@ -222,9 +359,18 @@ def tier_of(card):
     return None
 
 
-def display_name(name):
-    """« Roronoa Zoro (001) (Parallel) » → « Roronoa Zoro » : le palier dit la variante."""
-    return re.sub(r"\s*\([^)]*\)", "", name).strip()
+def display_name(name, departed=False):
+    """« Roronoa Zoro (001) (Parallel) » → « Roronoa Zoro » : le palier dit la variante.
+
+    Sauf pour une variante départagée par `assign_keys` : son tirage n'est dit
+    ni par le palier — elle a celui de sa jumelle — ni par son visuel, que
+    l'OPTCG API sert identique. Le nom est alors la seule chose qui la
+    distingue de la carte ordinaire, et il le garde.
+    """
+    labels = [label for label in re.findall(r"\(([^)]+)\)", name)
+              if not re.fullmatch(r"\d+", label) and not CODE.fullmatch(label)]
+    plain = re.sub(r"\s*\([^)]*\)", "", name).strip()
+    return f"{plain} ({labels[-1]})" if departed and labels else plain
 
 
 def price_rank(price):
@@ -344,10 +490,14 @@ def main():
             codes_by_expansion[product["idExpansion"]].add(found.group(1))
 
     entries, index, details = [], {}, {}
-    reused = rematched = 0
+    reused = rematched = departed = 0
     for set_info in sets:
         code = app_code(set_info["set_id"])
-        set_cards = [c for c in cards if c["set_id"] == set_info["set_id"]]
+        set_cards = dedupe([c for c in cards if c["set_id"] == set_info["set_id"]])
+        # Puis : deux cartes que l'API ne distingue pas doivent
+        # avoir deux clés, sans quoi la seconde est perdue et l'appariement
+        # Cardmarket ne peut pas tenir d'un passage à l'autre.
+        departed += assign_keys(set_cards)
         if not set_cards:
             continue
 
@@ -376,7 +526,8 @@ def main():
                 tiers.add(tier)
             by_key[key] = tier or "base"
             image_id = card["card_image_id"].replace(".jpg", "")
-            entry = {"n": display_name(card["card_name"]), "r": card["rarity"],
+            entry = {"n": display_name(card["card_name"], bool(card.get(ASSIGNED))),
+                     "r": card["rarity"],
                      "i": f"{IMAGES}/{image_id}.png"}
             if key in matched:
                 entry["cm"] = matched[key]
@@ -401,6 +552,9 @@ def main():
               f"Cardmarket {expansion} · hits reliés {priced}/{len(hits)}, {ambiguous} codes ambigus")
 
     entries.sort(key=lambda e: e["release"], reverse=True)
+    if departed:
+        print(f"  {departed} variantes départagées par leur tirage : "
+              f"l'API leur donne le code et le visuel de leur jumelle")
     print(f"  appariement Cardmarket : {reused} cartes reprises telles quelles, "
           f"{rematched} refaites")
 
