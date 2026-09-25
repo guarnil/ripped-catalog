@@ -14,13 +14,19 @@ Trois sorties :
   Cardmarket : ce que TCGdex renvoie à la demande pour Pokémon, et qu'aucune
   API Riftbound ne sert d'un seul tenant.
 
-Deux sources, sans clé :
+Trois sources, sans clé :
 
 - Riftcodex (api.riftcodex.com), catalogue ouvert, en anglais. Ses visuels
   sont servis par le CDN de Riot (cmsassets.rgpub.io) ;
 - les fichiers publics de Cardmarket (jeu 22 = Riftbound). Le catalogue
   produits sert ici à relier chaque carte à son identifiant Cardmarket ; la
-  cote, elle, est lue par l'app dans le guide des prix du jour.
+  cote, elle, est lue par l'app dans le guide des prix du jour ;
+- TCGCSV (tcgcsv.com), miroir du catalogue TCGplayer, pour les **promos
+  numérotés d'après une extension** — les cartes des sachets Nexus Night, des
+  kits d'avant-première et des tournois. Riftcodex ne les connaît pas, et
+  elles portent le dénominateur de l'extension de la saison : sans elles,
+  l'app enregistre la carte de booster de même numéro à leur place. Voir
+  `promo_cards()`.
 
 Le rapprochement carte → produit Cardmarket est la seule partie délicate :
 Cardmarket ne publie pas de numéro de collection, et une carte et ses
@@ -42,6 +48,14 @@ import urllib.request
 
 RIFTCODEX = "https://api.riftcodex.com"
 CARDMARKET = "https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_22.json"
+# TCGCSV : le miroir libre du catalogue TCGplayer, déjà lu par
+# generate_products.py. Seule source des promos numérotés — voir promo_cards().
+TCGCSV = "https://tcgcsv.com/tcgplayer"
+TCG_CATEGORY = 89
+TCG_IMAGE = "https://tcgplayer-cdn.tcgplayer.com/product/{id}_in_1000x1000.jpg"
+# Un groupe TCGplayer est repris chaque nuit, et une saison d'événements ajoute
+# des promos à une extension déjà sortie : ces fichiers ne se gardent qu'un jour.
+DAY = 86400
 # Riftcodex refuse le User-Agent par défaut d'urllib (403).
 HEADERS = {"User-Agent": "Ripped/1.0 (generate_riftbound.py)"}
 
@@ -52,8 +66,15 @@ CARD_INDEX = os.path.join(ROOT, "Ripped", "Resources", "CardIndexRiftbound.json"
 CARD_DETAILS = os.path.join(ROOT, "Ripped", "Resources", "RiftboundCards.json")
 
 # Extensions qui ne s'ouvrent pas en booster : promos (PR, OPP, JDG) et la
-# boîte de démarrage Proving Grounds, dont le contenu est fixe.
+# boîte de démarrage Proving Grounds, dont le contenu est fixe. Elles n'ont pas
+# d'entrée au catalogue ; leurs cartes numérotées d'après une extension du
+# catalogue, elles, rejoignent cette extension — voir promo_cards().
 SKIP = {"PR", "OPP", "JDG", "OGS"}
+
+# Les séries de promos dont les cartes portent le numéro d'une extension : les
+# sachets Nexus Night, les kits d'avant-première et les prix de tournoi.
+# Proving Grounds n'y est pas : sa boîte a sa propre numérotation (« /024 »).
+PROMO_SETS = {"PR", "OPP", "JDG"}
 
 # Les paliers de l'app, dans l'ordre d'affichage. Les trois premiers présents
 # sont mis en avant, le reste passe derrière « voir plus ».
@@ -84,10 +105,11 @@ PACK_ART = {
 IMAGE_PARAMS = "&w=600&fm=jpg"
 
 
-def get(url, cache_name):
+def get(url, cache_name, max_age=None):
     os.makedirs(CACHE, exist_ok=True)
     cached = os.path.join(CACHE, cache_name)
-    if os.path.exists(cached):
+    if os.path.exists(cached) and (max_age is None
+                                   or time.time() - os.path.getmtime(cached) < max_age):
         return json.load(open(cached))
     for attempt in range(3):
         try:
@@ -219,6 +241,106 @@ def match_products(cards, products):
     return matched, ambiguous
 
 
+def promo_name(name):
+    """Le nom d'un promo, réduit à ce qui l'identifie chez Cardmarket.
+
+    Cardmarket range les promos dans des extensions à part et ne dit pas d'où
+    ils viennent ; TCGplayer, lui, précise le tirage entre parenthèses
+    (« (Vendetta) », « (Champion) », « (R01b) »). On enlève tout cela avant de
+    comparer, puis on applique les mêmes règles que pour les cartes de booster.
+    """
+    name = re.sub(r"\s*\((Promo|Champion|Top 8|GG EZ|R0\d[a-c]|"
+                  r"Origins|Spiritforged|Unleashed|Vendetta)\)", "", name)
+    return normalized_name(name)
+
+
+def promo_tier(name, rarity):
+    """Le palier de l'app pour un promo, ou None pour une carte de base.
+
+    Riftcodex ne connaît pas ces cartes : il n'y a donc ni indicateur
+    `alternate_art` ni `signature` à lire, seulement la rareté TCGplayer et le
+    tirage que son nom précise. « Promo » n'est pas un palier — c'est la rareté
+    que TCGplayer donne à tout prix de tournoi, quelle que soit la carte.
+    """
+    for marker, tier in (("Signature", "signature"),
+                         ("Overnumbered", "overnumbered"),
+                         ("Alternate Art", "altArt")):
+        if f"({marker}" in name:
+            return tier
+    if rarity == "Showcase":
+        return "altArt"
+    if rarity == "Epic":
+        return "epic"
+    return None
+
+
+def promo_cards(denominators, index, details, cardmarket, tiers):
+    """Verse dans leur extension d'accueil les promos qui portent son numéro.
+
+    Un promo Riftbound n'est pas tiré d'un booster — sachets Nexus Night, kits
+    d'avant-première, prix de tournoi — mais il porte le **dénominateur de
+    l'extension de la saison** (« 069b/166 »), et c'est tout ce que l'app lit
+    au scan. Sans lui dans l'index, le repli de `CardIndex.resolveKey` sur la
+    souche enregistre la carte de booster de même numéro à sa place, avec sa
+    cote : une Mel promo passait pour la Mel du booster.
+
+    Ne sont versées que les cartes dont la clé **manque** à l'extension. Les
+    autres promos reprennent tel quel le numéro d'une carte de booster (le
+    sachet Nexus Night est fait aux trois quarts de communes réimprimées) :
+    rien ne les distingue à la lecture, et les confondre est sans conséquence.
+
+    Riftcodex ignore ces cartes — aucun de ses promos ne porte un dénominateur
+    Vendetta —, d'où le détour par TCGplayer, qui donne le numéro imprimé, la
+    rareté et un visuel. Le lien vers Cardmarket, lui, n'aboutit que pour un nom
+    unique dans ses extensions de promos : les six runes d'une saison y portent
+    le même, et mieux vaut pas de cote qu'une cote prise à une autre carte.
+    """
+    groups = get(f"{TCGCSV}/{TCG_CATEGORY}/groups", "tcg_groups.json", max_age=DAY)["results"]
+    by_name = collections.defaultdict(list)
+    for product in cardmarket:
+        by_name[promo_name(product["name"])].append(product)
+
+    added = linked = 0
+    for group in groups:
+        if (group["abbreviation"] or "").upper() not in PROMO_SETS:
+            continue
+        products = get(f"{TCGCSV}/{TCG_CATEGORY}/{group['groupId']}/products",
+                       f"tcg_products_{group['groupId']}.json", max_age=DAY)["results"]
+        for product in products:
+            fields = {e["name"]: e["value"] for e in product.get("extendedData", [])}
+            printed = re.fullmatch(r"\s*(\d+)([A-Za-z*]?)\s*/\s*(\d+)\s*", fields.get("Number") or "")
+            if not printed:
+                continue                # une rune (« R01b »), un jeton : pas de numéro d'extension
+            digits, suffix, total = printed.groups()
+            code = denominators.get(int(total))
+            if not code:
+                continue                # le dénominateur d'une extension hors catalogue
+            key = (digits.lstrip("0") or "0") + suffix.upper()
+            if key in index[code]:
+                continue                # le numéro d'une carte de booster : déjà connu
+            name, rarity = product["name"], fields.get("Rarity")
+            tier = promo_tier(name, rarity)
+            if tier and tier not in tiers[code]:
+                # Le palier n'est annoncé par aucune carte du booster : l'app ne
+                # l'afficherait pas pour cette extension.
+                print(f"  ! {code} {key} : palier {tier} absent du booster — versé en base")
+                tier = None
+            index[code][key] = tier or "base"
+            # Le tirage est la seule chose qui distingue ce promo de la carte de
+            # booster du même nom : il se dit dans le nom, faute d'un palier.
+            label = display_name(name)
+            entry = {"n": label if "Promo" in label else f"{label} (Promo)",
+                     "r": rarity or "Promo",
+                     "i": TCG_IMAGE.format(id=product["productId"])}
+            candidates = by_name.get(promo_name(name), [])
+            if len(candidates) == 1:
+                entry["cm"] = candidates[0]["idProduct"]
+                linked += 1
+            details[code][key] = entry
+            added += 1
+    return added, linked
+
+
 def swift_string(value):
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -231,6 +353,9 @@ def main():
     print(f"  {len(cards)} cartes Riftcodex, {len(products)} produits Cardmarket")
 
     entries, index, details = [], {}, {}
+    # De quoi verser ensuite les promos : le dénominateur imprimé de chaque
+    # extension, ses paliers, et les extensions Cardmarket déjà prises.
+    denominators, set_tiers, booster_expansions = {}, {}, set()
     for set_info in sets:
         code = set_info["set_id"]
         if code in SKIP:
@@ -263,6 +388,9 @@ def main():
         # Le total imprimé (« /298 ») : le plus fréquent des suffixes d'identifiant.
         totals = collections.Counter(c["riftbound_id"].rsplit("-", 1)[-1] for c in set_cards)
         printed = int(next(t for t, _ in totals.most_common() if t.isdigit()))
+        denominators[printed] = code
+        set_tiers[code] = tiers
+        booster_expansions.add(expansion)
 
         ordered = [t for t in TIER_ORDER if t in tiers]
         entries.append({
@@ -276,6 +404,13 @@ def main():
         priced = sum(1 for c in set_cards if c["riftbound_id"] in matched)
         print(f"    {code:4} {set_info['name']:14} {len(set_cards):4} cartes · "
               f"Cardmarket {expansion} · {priced} reliées, {ambiguous} groupes ambigus")
+
+    promos, linked = promo_cards(denominators, index, details,
+                                 [p for p in products
+                                  if p["idExpansion"] not in booster_expansions],
+                                 set_tiers)
+    print(f"  {promos} promos numérotés versés dans leur extension d'accueil, "
+          f"{linked} reliés à Cardmarket")
 
     entries.sort(key=lambda e: e["release"], reverse=True)
     years = [e["release"][:4] for e in entries if e["release"]]

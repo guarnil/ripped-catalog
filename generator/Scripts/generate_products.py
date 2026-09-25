@@ -8,7 +8,8 @@ extension, avec leur photo :
 Source : TCGCSV (tcgcsv.com), miroir libre et quotidien du catalogue
 TCGplayer, sans clé. C'est la seule source trouvée qui couvre les trois
 licences avec, pour chaque extension, la liste de ses produits — sachet,
-display, ETB, bundle, blisters, Vault, Double Pack — et une photo de chacun.
+display, ETB, bundle, blisters, Vault, Double Pack, sachet promo — et une photo
+de chacun.
 Son auteur demande de ne pas le solliciter à l'excès : tout est mis en cache.
 
 Ce que l'app en fait :
@@ -106,6 +107,11 @@ POKEMON_NAMES = {
 SKIP = ("case", "sleeved", "art bundle", "pokemon center", "exclusive",
         "deck", "decks", "kit", "tin", "tins", "promo", "pre-release", "checklane")
 SKIP_PHRASES = ("[set of",)
+# Le sachet Nexus Night : trois cartes promo, gagnées en soirée de jeu en
+# boutique. Il se teste avant `SKIP`, qui écarte le mot « promo » — et qui a
+# raison de le faire pour tout le reste, prix de tournoi et cartes d'événement.
+PROMO_PACK = "nexus night promo pack"
+
 # Groupes TCGplayer à ne jamais prendre pour une extension provisoire.
 PROVISIONAL_SKIP = ("release event", "promo", "exclusives", "miscellaneous",
                     "tournament", "championship", "pre-release", "prerelease")
@@ -183,6 +189,9 @@ def item_of(name, license):
     """L'item de l'app que désigne un nom de produit, ou None."""
     lowered = name.lower()
     words = set(re.findall(r"[a-z&']+", lowered))
+    if PROMO_PACK in lowered:
+        # Le carton de sachets, lui, reste écarté comme tous les « case ».
+        return None if words & {"case", "box", "display"} else "promoPack"
     if words & set(SKIP) or any(phrase in lowered for phrase in SKIP_PHRASES):
         return None
     for item, keywords in RULES:
