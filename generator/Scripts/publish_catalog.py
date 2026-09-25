@@ -15,7 +15,8 @@ On y écrit :
 - `extensions.json` : les séries et extensions des trois jeux, relues dans les
   fichiers Swift générés — ce sont eux qui font foi, l'app compilée et la copie
   publiée ne peuvent donc pas diverger ;
-- les index de rareté, les fiches de cartes et les produits, copiés tels quels
+- les index de rareté, les empreintes de cartes, les fiches et les produits,
+  copiés tels quels
   depuis `Ripped/Resources/` — l'index Pokémon reçoit en plus les cartes des
   extensions que TCGdex ne connaît pas encore, lues chez TCGplayer par
   `generate_products.py` ;
@@ -83,6 +84,12 @@ COPIED = [
     "RiftboundCards.json",
     "OnePieceCards.json",
     "Products.json",
+    # L'empreinte de chaque carte — PV, dégâts, coût de retraite — que le scan
+    # recoupe avec le numéro lu. Voir `facts_of` dans generate_products.py.
+    "CardFacts.json",
+    # Le nom français de chaque carte : le plus gros texte qu'elle porte, et
+    # donc le plus sûr à lire quand le numéro se dérobe.
+    "CardNames.json",
 ]
 
 # Publiés sans être embarqués. Une cote vieillit trop vite pour tenir dans un

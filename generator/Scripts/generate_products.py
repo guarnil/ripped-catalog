@@ -45,6 +45,8 @@ PENDING = os.path.join(ROOT, "Ripped", "Resources", "PendingExtensions.json")
 # Et leurs cartes, quand TCGplayer les publie avant le catalogue de cartes.
 PENDING_CARDS = os.path.join(ROOT, "Ripped", "Resources", "PendingCards.json")
 CLASSIC_CARDS = os.path.join(ROOT, "Ripped", "Resources", "ClassicCards.json")
+# L'empreinte de chaque carte : ce que le scan peut recouper avec le numéro.
+CARD_FACTS = os.path.join(ROOT, "Ripped", "Resources", "CardFacts.json")
 
 # Les catégories TCGplayer des trois licences.
 CATEGORIES = {"pokemon": 3, "onePiece": 68, "riftbound": 89}
@@ -358,6 +360,58 @@ def cards_of(products, official=None):
             "main": ordered[:3], "more": ordered[3:]}
 
 
+# Les dégâts d'une attaque, dans « [1] Tail Snap (20) » ou « [G] Stampede (10×) ».
+DAMAGE = re.compile(r"\((\d+)[+×x-]?\)")
+
+
+def facts_of(products, host=None):
+    """L'empreinte de chaque carte : points de vie, dégâts, coût de retraite.
+
+    **Pourquoi.** Le scan ne lit qu'une chose, le numéro de collection — la
+    plus petite chose imprimée sur la carte, dans un coin, parfois à droite,
+    parfois couchée, souvent sur l'illustration. Un seul chiffre mal lu désigne
+    alors une autre carte de l'extension, tout aussi valide, et l'app
+    l'enregistre sans broncher.
+
+    Ces deux nombres-là, eux, sont écrits en grand et toujours à la même
+    place : les PV en haut à droite, les dégâts au bout de chaque ligne
+    d'attaque. Ils ne désignent pas une carte à eux seuls, mais ils
+    **démasquent les erreurs d'un chiffre**, mesuré sur les 8 970 cartes du
+    cache et les 131 278 confusions qu'elles permettent :
+
+        PV seuls                 92,1 %
+        PV + dégâts              98,7 %
+        PV + dégâts + retraite   99,0 %
+
+    Le coût de retraite n'est pas retenu : il s'imprime en **symboles
+    d'énergie**, que l'app ne peut pas lire à la caméra, et il n'ajoute que
+    trois dixièmes. On ne publie que ce qui se lit.
+
+    Ces nombres ne dépendent pas non plus de la langue, contrairement au nom :
+    120 PV s'impriment 120 en français comme en anglais.
+
+    Rendue au format publié : `{"4": [120, [10, 20, 70]]}` — PV et dégâts
+    triés. Des PV que TCGplayer ne donne pas sont `null`.
+    """
+    facts = {}
+    for product in products:
+        fields = {e["name"]: e["value"] for e in product.get("extendedData", [])}
+        printed = fields.get("Number")
+        if not printed:
+            continue
+        key, _ = card_key(printed, host)
+        hp = (fields.get("HP") or "").strip()
+        damage = sorted(int(m) for attack in ("Attack 1", "Attack 2", "Attack 3", "Attack 4")
+                        for m in DAMAGE.findall(fields.get(attack) or ""))
+        entry = [int(hp) if hp.isdigit() else None, damage]
+        # Une carte sans PV ni dégâts — un Dresseur, une Énergie — n'a pas
+        # d'empreinte : rien à recouper, et une entrée vide ne dirait rien.
+        if entry[0] is None and not damage:
+            continue
+        facts.setdefault(key, entry)
+    return facts
+
+
 def provisional(license, group, code=None):
     """L'extension que TCGplayer vend déjà, mais que le catalogue de cartes ne
     connaît pas encore.
@@ -411,6 +465,8 @@ def main():
     # être classées qu'une fois connu le dénominateur de leur extension
     # d'accueil, qui peut se lire après elles.
     classic_groups, officials, classic_cards = [], {}, {}
+    # Empreintes, par extension de l'app : voir facts_of().
+    facts = {}
 
     for license, category in CATEGORIES.items():
         groups = get(f"{category}/groups", f"groups_{category}.json", max_age=DAY)["results"]
@@ -446,6 +502,12 @@ def main():
                     classic_groups.append((code, products))
                 else:
                     officials[code] = max(officials.get(code, 0), printed_total(products))
+                    # L'empreinte de toutes les extensions, pas seulement des
+                    # provisoires : c'est le recoupement du scan, et il sert
+                    # surtout sur les extensions déjà cataloguées.
+                    read = facts_of(products)
+                    if read:
+                        facts.setdefault(code, {}).update(read)
 
             # Les cartes d'une extension que le catalogue ne connaît pas
             # encore. Les groupes supplémentaires sont écartés : la collection
@@ -488,6 +550,11 @@ def main():
             print(f"  ! collection classique {code} sans extension d'accueil connue — ignorée")
             continue
         read = cards_of(products, official=host)
+        # Les réimpressions rejoignent l'empreinte de leur extension d'accueil,
+        # sous leur numéro imprimé entier (« 4/102 »), comme leur index.
+        classic_facts = facts_of(products, host=host)
+        if classic_facts:
+            facts.setdefault(code, {}).update(classic_facts)
         if read["index"]:
             classic_cards[code] = read["index"]
             print(f"  collection classique {code} : {len(read['index'])} cartes, "
@@ -501,6 +568,8 @@ def main():
               ensure_ascii=False, sort_keys=True)
     json.dump(classic_cards, open(CLASSIC_CARDS, "w"), separators=(",", ":"),
               ensure_ascii=False, sort_keys=True)
+    json.dump(facts, open(CARD_FACTS, "w"), separators=(",", ":"),
+              ensure_ascii=False, sort_keys=True)
     if pending:
         print("  en attente de cartes : "
               + ", ".join(f"{c} ({e['name']}, {e['releaseDate']})" for c, e in sorted(pending.items())))
@@ -508,6 +577,9 @@ def main():
         print(f"    {code} : {len(read['index'])} cartes lues chez TCGplayer "
               f"({read['cardCount']} officielles) · "
               + ", ".join(read["main"] + read["more"]))
+    empreintes = sum(len(v) for v in facts.values())
+    print(f"  {empreintes} empreintes sur {len(facts)} extensions "
+          f"({os.path.getsize(CARD_FACTS) / 1024:.0f} Ko)")
     packs = sum(1 for e in catalog.values() if "pack" in e)
     items = sum(len(e["items"]) for e in catalog.values())
     print(f"  {len(catalog)} extensions · {packs} sachets · {items} produits "

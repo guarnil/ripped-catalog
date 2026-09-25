@@ -1,8 +1,10 @@
 {
   "files": {
+    "CardFacts.json": "322e3d1d9e135b229ce28c52863caf49d316b076b61f7e9dd9d5742f867b6de8",
     "CardIndex.json": "694b57719bc48c6f55a76d6a049b0818770d7d2f67b083b27f0758aa44cca70f",
     "CardIndexOnePiece.json": "d23ceb5c2c278163b62087777c0ebcbfbb2147bbb84365f5365137197f5779ca",
     "CardIndexRiftbound.json": "218b421ddc5b11c9ecb43f8f9c732a7e15be3d47fe96cb74d59e473346b3cba1",
+    "CardNames.json": "cde8e97884be92737ec6c838f64a61e02be75038f6ef1bf16679e6e557852954",
     "OnePieceCards.json": "404085e5591a81b971c1ee91d788cd98c09c64d77e8edf5518f817f9c8cca0b5",
     "Products.json": "a55aff141de759c5bb6e11874d1cda3477d2d080a6ce21e0518c016bc08228d2",
     "Quotes.json": "011df2d247839c15e6ec3db1a8d1e9a3cfaeb7b2be375837b323c25bccf9682a",

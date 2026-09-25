@@ -32,6 +32,9 @@ CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = os.path.join(ROOT, "Ripped", "Models", "Catalog+Generated.swift")
 CARD_INDEX = os.path.join(ROOT, "Ripped", "Resources", "CardIndex.json")
+# Le nom français de chaque carte : le plus gros texte de la carte, et donc le
+# plus sûr à lire. Sert à désigner la carte quand son numéro est illisible.
+CARD_NAMES = os.path.join(ROOT, "Ripped", "Resources", "CardNames.json")
 
 # Séries suivies, dans l'ordre d'affichage du sélecteur.
 SERIES_ORDER = ["me", "sv", "swsh", "sm", "xy"]
@@ -114,8 +117,13 @@ def fetch(path):
                 print(f"  ! échec {path} : {error}", file=sys.stderr)
                 return None
             time.sleep(1.5 * (attempt + 1))
-    if isinstance(data, dict):
-        data.pop("cards", None)   # la liste des cartes ne sert pas ici
+    if isinstance(data, dict) and isinstance(data.get("cards"), list):
+        # De la liste des cartes, on ne garde que le numéro et le nom : c'est
+        # le nom **français**, celui qui est imprimé sur la carte scannée, et
+        # l'API GraphQL ne le donne pas. Le reste — visuel, rareté, illustrateur
+        # — ne sert pas ici et alourdirait le cache de plusieurs mégaoctets.
+        data["cards"] = [{"localId": c.get("localId"), "name": c.get("name")}
+                         for c in data["cards"]]
     json.dump(data, open(cached, "w"))
     return data
 
@@ -264,13 +272,21 @@ def main():
     with ThreadPoolExecutor(max_workers=5) as pool:
         list(pool.map(rarities_of, candidates))
 
-    entries = []
+    entries, names = [], {}
     for detail in details:
         if not detail or "name" not in detail:
             continue
         set_id = detail["id"]
         era = era_of(set_id)
         main_rarities, more_rarities = rarities_of(set_id)
+        # Le nom français de chaque carte, tel qu'il est imprimé dessus :
+        # l'API française le donne dans le détail de l'extension, déjà
+        # téléchargé ici. GraphQL, lui, ne répond qu'en anglais.
+        for card in detail.get("cards") or []:
+            local = card.get("localId") or ""
+            key = local.lstrip("0") if local.isdigit() else local
+            if key and card.get("name"):
+                names.setdefault(set_id.upper(), {})[key] = card["name"]
         entries.append({
             "code": set_id.upper(),
             "name": detail["name"],
@@ -361,6 +377,10 @@ def main():
             index[entry["code"]] = by_number
     os.makedirs(os.path.dirname(CARD_INDEX), exist_ok=True)
     json.dump(index, open(CARD_INDEX, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    names = {code: cards for code, cards in names.items() if code in index}
+    json.dump(names, open(CARD_NAMES, "w"), separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    print(f"  {sum(len(v) for v in names.values())} noms français "
+          f"({os.path.getsize(CARD_NAMES) / 1024:.0f} Ko)")
     total_cards = sum(len(v) for v in index.values())
     size = os.path.getsize(CARD_INDEX) / 1024
     print(f"  index de {total_cards} cartes écrit ({size:.0f} Ko)")
