@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ripped · Confidentialité</title>
+<style>
+  :root {
+    --bg: #F7F8FA; --card: #FFFFFF; --ink: #0A0C0F; --ink2: rgba(10,12,15,.62);
+    --ink3: rgba(10,12,15,.45); --line: rgba(10,12,15,.09);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0A0C0F; --card: #14181E; --ink: #F2F4F7; --ink2: rgba(242,244,247,.62);
+      --ink3: rgba(242,244,247,.45); --line: rgba(242,244,247,.08);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 16px 64px; }
+  .eyebrow { font: 600 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .14em; color: var(--ink3); }
+  h1 { font-size: 30px; line-height: 1.2; margin: 10px 0 6px; }
+  .updated { color: var(--ink3); font-size: 13px; margin: 0 0 28px; }
+  h2 { font-size: 18px; margin: 34px 0 8px; }
+  p, li { color: var(--ink2); }
+  strong { color: var(--ink); font-weight: 600; }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 14px 0; }
+  .card p { margin: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 10px 0; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink); font-weight: 600; }
+  td { color: var(--ink2); }
+  a { color: inherit; }
+  footer { margin-top: 44px; font-size: 13px; color: var(--ink3); }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">RIPPED</div>
+  <h1>Politique de confidentialité</h1>
+  <p class="updated">Dernière mise à jour : 27 septembre 2026</p>
+
+  <div class="card">
+    <p><strong>En bref :</strong> Ripped n'a pas de compte, pas de publicité et ne te suit pas. Tes ouvertures, tes cartes et tes photos restent sur ton téléphone. Seuls des rapports de plantage anonymes sont envoyés, pour corriger les bugs.</p>
+  </div>
+
+  <h2>Qui est responsable</h2>
+  <p>Ripped est éditée par <strong>[NOM ET PRÉNOM]</strong>, développeur indépendant. Pour toute question sur tes données : <strong>[ADRESSE E-MAIL DE CONTACT]</strong>.</p>
+
+  <h2>Ce qui reste sur ton appareil</h2>
+  <p>Tout ce que tu saisis est enregistré uniquement sur ton iPhone, et n'est envoyé à personne :</p>
+  <ul>
+    <li>tes sessions d'ouverture, les raretés et les cartes obtenues ;</li>
+    <li>les prix que tu as payés ;</li>
+    <li>les photos de sachets que tu associes aux extensions ;</li>
+    <li>tes réglages (définition du hit, couleurs, apparence…).</li>
+  </ul>
+  <p>Ces données te suivent dans les sauvegardes iCloud de ton appareil si tu les as activées, comme celles de toute app. Tu peux les exporter dans un fichier depuis les réglages de l'app, et les effacer à tout moment (Réglages → Effacer l'historique, ou en supprimant l'app).</p>
+
+  <h2>La caméra</h2>
+  <p>La caméra sert uniquement à lire le numéro imprimé en bas de tes cartes. La lecture se fait <strong>sur ton téléphone</strong> : aucune image n'est envoyée ni conservée. Seul le numéro lu sert ensuite à retrouver la carte (voir ci-dessous).</p>
+
+  <h2>Ce que l'app va chercher sur internet</h2>
+  <p>Pour afficher les cartes, leurs visuels et leurs cotes, Ripped contacte les services suivants. Ces requêtes ne contiennent aucune donnée te concernant — seulement la carte ou l'extension recherchée. Comme pour toute connexion, ces services voient l'adresse IP de ton appareil.</p>
+  <table>
+    <tr><th>Service</th><th>Pourquoi</th></tr>
+    <tr><td>TCGdex</td><td>Informations et cotes des cartes Pokémon (cotes Cardmarket)</td></tr>
+    <tr><td>GitHub Pages</td><td>Le catalogue des extensions et l'historique des cotes, publiés par Ripped</td></tr>
+    <tr><td>Cardmarket</td><td>Guide de prix public, pour les cotes Riftbound et One Piece</td></tr>
+    <tr><td>Riot Games, Bandai</td><td>Visuels des extensions et des cartes Riftbound et One Piece</td></tr>
+  </table>
+
+  <h2>Rapports de plantage</h2>
+  <p>Quand l'app plante, un rapport est envoyé à <strong>Firebase Crashlytics</strong> (Google) : l'endroit du code où le plantage a eu lieu, le modèle d'appareil, la version d'iOS et de l'app, et un identifiant aléatoire propre à cette installation. Il ne contient ni ton nom, ni tes cartes, ni tes photos, et ne sert qu'à corriger les bugs. Google conserve ces rapports 90 jours. Ils peuvent être traités hors de l'Union européenne, dans le cadre des garanties prévues par Google.</p>
+  <p>Ripped n'utilise <strong>aucun outil de mesure d'audience</strong> (Firebase Analytics est désactivé), aucune publicité, et ne pratique aucun pistage entre apps ou sites.</p>
+
+  <h2>Achats</h2>
+  <p>L'achat de Ripped Pro est entièrement géré par Apple. Ripped ne voit jamais tes informations de paiement : l'app reçoit seulement la confirmation que l'achat a eu lieu.</p>
+
+  <h2>Tes droits</h2>
+  <p>Conformément au RGPD, tu disposes d'un droit d'accès, de rectification, d'effacement et d'opposition. Comme presque tout reste sur ton appareil, tu les exerces directement dans l'app. Pour les rapports de plantage, écris à l'adresse ci-dessus. Tu peux aussi saisir la <a href="https://www.cnil.fr">CNIL</a>.</p>
+
+  <h2>Enfants</h2>
+  <p>Ripped ne collecte sciemment aucune donnée personnelle, y compris celles des enfants.</p>
+
+  <h2>Changements</h2>
+  <p>Si cette politique change, la nouvelle version sera publiée sur cette page, avec sa date de mise à jour.</p>
+
+  <footer>Ripped n'est affiliée ni à The Pokémon Company, ni à Riot Games, ni à Bandai. Voir aussi les <a href="cgu.html">conditions d'utilisation</a>.</footer>
+</main>
+</body>
+</html>
