@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS = os.path.join(ROOT, "Ripped", "Models")
@@ -97,6 +98,16 @@ COPIED = [
 # par la publication. Absent, le fichier ne bloque rien — l'app se contente
 # alors de TCGdex, comme avant.
 PUBLISHED_ONLY = ["Quotes.json"]
+
+# L'historique des cotes, relevé jour par jour par `record_history.py` dans
+# `Config/History/`, publié sous `history/<CODE>.json` en séries par carte.
+HISTORY = os.path.join(ROOT, "Config", "History")
+HISTORY_DIR = "history"
+
+# Ce que l'app peut afficher d'un coup d'œil. Au-delà, on garde tout dans le
+# dépôt — l'archive est là pour ça — mais on ne le sert pas : un fichier qui
+# grossit sans fin finirait par coûter plus cher à télécharger qu'il n'apporte.
+HISTORY_DAYS = 180
 CONFIG = os.path.join(ROOT, "Config")
 
 
@@ -356,6 +367,54 @@ def write(name, data):
     return hashlib.sha256(data).hexdigest()
 
 
+def publish_history(renames):
+    """Transpose les journées relevées en séries par carte.
+
+    `record_history.py` écrit une journée par fichier : c'est le bon format
+    pour accumuler — écrit une fois, jamais retouché, et un jour manquant se
+    voit. C'est le mauvais format pour lire le cours d'une carte, qui
+    demanderait d'ouvrir cent quatre-vingts fichiers. La transposition se fait
+    donc ici, à la publication.
+
+    Ces fichiers ne sont **pas** dans le manifeste, volontairement.
+    `RemoteCatalog` retélécharge tout fichier dont l'empreinte a changé : un
+    historique manifesté serait rapatrié en entier chaque jour, pour tous les
+    jeux, sur tous les appareils. L'app va donc les chercher extension par
+    extension, quand elle en a besoin, comme elle le fait déjà du guide
+    Cardmarket.
+    """
+    if not os.path.isdir(HISTORY):
+        return 0, 0
+
+    days = sorted(f[:-5] for f in os.listdir(HISTORY)
+                  if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.json", f))
+    if not days:
+        return 0, 0
+    days = days[-HISTORY_DAYS:]
+
+    series = {}
+    for day in days:
+        with open(os.path.join(HISTORY, f"{day}.json"), encoding="utf-8") as f:
+            table = json.load(f)
+        for code, points in table.items():
+            # Une extension ouverte sous son code provisoire garde son cours.
+            code = renames.get(code, code)
+            for number, cents in points.items():
+                series.setdefault(code, {}).setdefault(number, {})[day] = cents
+
+    out = os.path.join(SITE, HISTORY_DIR)
+    os.makedirs(out, exist_ok=True)
+    for code, table in series.items():
+        data = json.dumps(table, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        with open(os.path.join(out, f"{code}.json"), "wb") as f:
+            f.write(data)
+
+    cards = sum(len(t) for t in series.values())
+    print(f"  historique : {len(series)} extensions, {cards} cartes suivies "
+          f"sur {len(days)} journée(s)")
+    return len(series), cards
+
+
 def sync_generator():
     """Copie les scripts qui viennent de produire ce catalogue à côté de lui.
 
@@ -395,10 +454,43 @@ def git(*args):
     subprocess.run(["git", "-C", SITE, *args], check=True)
 
 
+def published_renames():
+    """Les renommages tels que le catalogue déjà publié les déclare.
+
+    Lus là plutôt que recalculés : en mode historique seul, on ne relit pas
+    les catalogues Swift, et c'est de toute façon la copie publiée qui fait
+    foi pour les apps installées.
+    """
+    path = os.path.join(SITE, "extensions.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f).get("renames", {})
+
+
+def push(pathspec, message):
+    """Commite et pousse une partie du dépôt publié.
+
+    Un `add` ciblé et non `add -A` : une publication d'historique ne doit pas
+    emporter au passage un catalogue à moitié régénéré qui traînerait dans le
+    clone.
+    """
+    git("add", "--", pathspec)
+    if subprocess.run(["git", "-C", SITE, "diff", "--cached", "--quiet"]).returncode == 0:
+        print("Rien de nouveau à publier.")
+        return False
+    git("commit", "-m", message)
+    git("push")
+    print("Publié.")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--push", action="store_true", help="committer et pousser CatalogSite/")
     parser.add_argument("--site", help="dossier à remplir, à la place de CatalogSite/ (GitHub Actions)")
+    parser.add_argument("--history-only", action="store_true",
+                        help="ne publier que l'historique des cotes, sans toucher au catalogue")
     args = parser.parse_args()
 
     global SITE
@@ -407,6 +499,18 @@ def main():
 
     if not os.path.isdir(SITE):
         sys.exit(f"{SITE} est absent : clone d'abord le dépôt ripped-catalog à cet endroit.")
+
+    # Le relevé des cotes est quotidien et automatique ; le catalogue, lui, se
+    # publie quand on l'a décidé, après avoir relu ce qu'il change. Les
+    # mélanger, ce serait publier chaque matin un catalogue que personne n'a
+    # regardé — et faire dépendre l'historique des garde-fous du catalogue,
+    # qui refusent la publication pour de bonnes raisons qui ne le concernent
+    # pas.
+    if args.history_only:
+        publish_history(published_renames())
+        if args.push:
+            push(HISTORY_DIR, f"Cotes : l'historique au {date.today().isoformat()}")
+        return
 
     series, extensions = read_swift_catalog()
 
@@ -494,6 +598,8 @@ def main():
                               sort_keys=True).encode("utf-8")
         check_not_shrinking(name, table, renames)
         hashes[name] = write(name, data)
+
+    publish_history(renames)
 
     manifest = json.dumps({"schema": SCHEMA, "files": hashes}, indent=2, sort_keys=True).encode("utf-8")
     write("manifest.json", manifest)
