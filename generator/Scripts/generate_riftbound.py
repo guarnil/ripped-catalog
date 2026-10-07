@@ -105,22 +105,46 @@ PACK_ART = {
 IMAGE_PARAMS = "&w=600&fm=jpg"
 
 
+# Une source qui ne répond pas fait échouer tout le passage : rien n'est
+# publié sans elle. Ses pannes durent souvent quelques minutes, alors on
+# réessaie en espaçant de plus en plus, plutôt que d'abandonner au bout de
+# quatre secondes. Une fois qu'une requête a épuisé ses essais, les suivantes
+# n'en font plus qu'un : le passage échouera de toute façon, et attendre encore
+# ne ferait que buter sur la limite de 30 minutes du travail.
+RETRY_DELAYS = (10, 30, 60, 120)
+_gave_up = False
+
+
+def with_retries(call):
+    """Le résultat de `call()`, réessayé après chaque délai de `RETRY_DELAYS`.
+    Si le dernier essai échoue aussi, son erreur remonte."""
+    global _gave_up
+    for delay in () if _gave_up else RETRY_DELAYS:
+        try:
+            return call()
+        except Exception:                               # noqa: BLE001
+            time.sleep(delay)
+    try:
+        return call()
+    except Exception:
+        _gave_up = True
+        raise
+
+
 def get(url, cache_name, max_age=None):
     os.makedirs(CACHE, exist_ok=True)
     cached = os.path.join(CACHE, cache_name)
     if os.path.exists(cached) and (max_age is None
                                    or time.time() - os.path.getmtime(cached) < max_age):
         return json.load(open(cached))
-    for attempt in range(3):
-        try:
-            request = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(request, timeout=45) as response:
-                data = json.load(response)
-            break
-        except Exception as error:                      # noqa: BLE001
-            if attempt == 2:
-                sys.exit(f"  ! échec {url} : {error}")
-            time.sleep(1.5 * (attempt + 1))
+    def load():
+        request = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(request, timeout=45) as response:
+            return json.load(response)
+    try:
+        data = with_retries(load)
+    except Exception as error:                          # noqa: BLE001
+        sys.exit(f"  ! échec {url} : {error}")
     json.dump(data, open(cached, "w"))
     return data
 

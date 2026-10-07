@@ -121,6 +121,32 @@ def usd_to_eur():
     return (payload.get("rates") or {}).get("EUR")
 
 
+# Une source qui ne répond pas fait échouer tout le passage : rien n'est
+# publié sans elle. Ses pannes durent souvent quelques minutes, alors on
+# réessaie en espaçant de plus en plus, plutôt que d'abandonner au bout de
+# quatre secondes. Une fois qu'une requête a épuisé ses essais, les suivantes
+# n'en font plus qu'un : le passage échouera de toute façon, et attendre encore
+# ne ferait que buter sur la limite de 30 minutes du travail.
+RETRY_DELAYS = (10, 30, 60, 120)
+_gave_up = False
+
+
+def with_retries(call):
+    """Le résultat de `call()`, réessayé après chaque délai de `RETRY_DELAYS`.
+    Si le dernier essai échoue aussi, son erreur remonte."""
+    global _gave_up
+    for delay in () if _gave_up else RETRY_DELAYS:
+        try:
+            return call()
+        except Exception:                               # noqa: BLE001
+            time.sleep(delay)
+    try:
+        return call()
+    except Exception:
+        _gave_up = True
+        raise
+
+
 def cardmarket_prices(ids):
     """Le prix Cardmarket des produits demandés, en euros.
 
@@ -132,8 +158,10 @@ def cardmarket_prices(ids):
         return {}
     request = urllib.request.Request(CARDMARKET_GUIDE,
                                      headers={"User-Agent": "Ripped/1.0 (generate_quotes.py)"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        guide = json.load(response)
+    def load():
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.load(response)
+    guide = with_retries(load)
     found = {}
     for line in guide.get("priceGuides") or []:
         if line["idProduct"] not in ids:

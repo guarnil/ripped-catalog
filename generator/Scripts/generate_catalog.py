@@ -102,21 +102,45 @@ SKIP = {"sve", "mee", "swsh4.5sv",          # decks d'énergies, Shiny Vault
 SKIP_SUFFIXES = ("tg", "gg")                # sous-collections (galeries)
 
 
+# Une source qui ne répond pas fait échouer tout le passage : rien n'est
+# publié sans elle. Ses pannes durent souvent quelques minutes, alors on
+# réessaie en espaçant de plus en plus, plutôt que d'abandonner au bout de
+# quatre secondes. Une fois qu'une requête a épuisé ses essais, les suivantes
+# n'en font plus qu'un : le passage échouera de toute façon, et attendre encore
+# ne ferait que buter sur la limite de 30 minutes du travail.
+RETRY_DELAYS = (10, 30, 60, 120)
+_gave_up = False
+
+
+def with_retries(call):
+    """Le résultat de `call()`, réessayé après chaque délai de `RETRY_DELAYS`.
+    Si le dernier essai échoue aussi, son erreur remonte."""
+    global _gave_up
+    for delay in () if _gave_up else RETRY_DELAYS:
+        try:
+            return call()
+        except Exception:                               # noqa: BLE001
+            time.sleep(delay)
+    try:
+        return call()
+    except Exception:
+        _gave_up = True
+        raise
+
+
 def fetch(path):
     os.makedirs(CACHE, exist_ok=True)
     cached = os.path.join(CACHE, re.sub(r"[^a-zA-Z0-9._-]", "_", path) + ".json")
     if os.path.exists(cached):
         return json.load(open(cached))
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(f"{API}/{path}", timeout=30) as response:
-                data = json.load(response)
-            break
-        except Exception as error:                      # noqa: BLE001
-            if attempt == 2:
-                print(f"  ! échec {path} : {error}", file=sys.stderr)
-                return None
-            time.sleep(1.5 * (attempt + 1))
+    def load():
+        with urllib.request.urlopen(f"{API}/{path}", timeout=30) as response:
+            return json.load(response)
+    try:
+        data = with_retries(load)
+    except Exception as error:                          # noqa: BLE001
+        print(f"  ! échec {path} : {error}", file=sys.stderr)
+        return None
     if isinstance(data, dict) and isinstance(data.get("cards"), list):
         # De la liste des cartes, on ne garde que le numéro et le nom : c'est
         # le nom **français**, celui qui est imprimé sur la carte scannée, et
@@ -141,9 +165,11 @@ def cards_of(set_id):
         "https://api.tcgdex.net/v2/graphql",
         data=json.dumps(query).encode(),
         headers={"Content-Type": "application/json"})
-    try:
+    def load():
         with urllib.request.urlopen(request, timeout=45) as response:
-            payload = json.load(response)
+            return json.load(response)
+    try:
+        payload = with_retries(load)
         cards = {c["localId"]: c["rarity"]
                  for c in payload.get("data", {}).get("cards", [])
                  if c["id"].rsplit("-", 1)[0] == set_id}
