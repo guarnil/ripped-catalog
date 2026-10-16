@@ -24,7 +24,8 @@ Les photos sont détourées par l'app : TCGplayer les publie sur fond blanc.
 
 Le même fichier de produits contient les **cartes** de l'extension : toute
 entrée qui porte un « Number » en est une. On s'en sert pour les extensions
-Pokémon que TCGdex ne connaît pas encore (`PendingCards.json`) : c'est ce qui
+Pokémon que TCGdex ne connaît pas encore, et Riftbound que Riftcodex ne
+connaît pas encore (`PendingCards.json`) : c'est ce qui
 rend une nouveauté scannable dès sa sortie, sans attendre que le catalogue de
 cartes la saisisse. Voir `provisional()` et `Scripts/publish_catalog.py`.
 """
@@ -280,6 +281,18 @@ TIER_ORDER = ["doubleRare", "illustration", "specialIllustration", "v",
               "ultra", "secret", "hyper", "megaHyper", "megaAttack", "ace", "shiny",
               "classic"]
 
+# Riftbound : TCGplayer dit la variante entre parenthèses, dans le nom
+# (« (Alternate Art) », « (Heartsteel Overnumbered) », « (Signature) »), et
+# range tout le reste des variantes — runes alternatives, cartes d'art spécial
+# — en « Showcase ». Mêmes règles que `promo_tier` dans generate_riftbound.py.
+#
+# Contrôlé sur Vendetta contre la liste officielle : TCGplayer y donne les
+# 31 overnumbered et les 9 signatures que Riftcodex ne signale pas.
+RIFTBOUND_MARKERS = (("Signature", "signature"),
+                     ("Overnumbered", "overnumbered"),
+                     ("Alternate Art", "altArt"))
+RIFTBOUND_TIER_ORDER = ["epic", "altArt", "overnumbered", "signature"]
+
 UNKNOWN_SEEN = set()
 
 
@@ -381,6 +394,55 @@ def cards_of(products, official=None):
             present.add(tier)
     ordered = [t for t in TIER_ORDER if t in present]
     return {"index": index, "cardCount": official,
+            "main": ordered[:3], "more": ordered[3:]}
+
+
+def riftbound_tier(name, rarity):
+    """Le palier de l'app pour une carte Riftbound TCGplayer, ou None pour une
+    carte de base."""
+    variants = " ".join(re.findall(r"\(([^)]*)\)", name))
+    for marker, tier in RIFTBOUND_MARKERS:
+        if marker in variants:
+            return tier
+    return {"Showcase": "altArt", "Epic": "epic"}.get(rarity)
+
+
+def riftbound_cards_of(products):
+    """`cards_of` pour Riftbound, en attendant que Riftcodex saisisse
+    l'extension — avec, en plus, la fiche de chaque carte au format de
+    `RiftboundCards.json` (nom, rareté imprimée, visuel) : ce que
+    generate_riftbound.py tire de Riftcodex, et que rien d'autre ne donne.
+
+    Les clés suivent `card_key` de generate_riftbound.py : « 063/167 » → « 63 »,
+    « 061a/167 » → « 61A », « SP4/005 » → « SP4 », « R02a » → « R02A ». Le
+    dénominateur n'est jamais gardé : une carte d'art spécial a le sien
+    (« /005 »), que l'app ne lit pas. Les jetons (« T05 // T06 ») ne sont pas
+    tirés en booster et restent dehors, comme chez Riftcodex.
+    """
+    index, details, present, official = {}, {}, set(), 0
+    for product in products:
+        fields = {e["name"]: e["value"] for e in product.get("extendedData", [])}
+        printed = (fields.get("Number") or "").strip()
+        if not printed or "//" in printed:
+            continue
+        number, _, total = printed.partition("/")
+        number = number.strip().upper()
+        match = re.fullmatch(r"(\d+)(.*)", number)
+        key = (match.group(1).lstrip("0") or "0") + match.group(2) if match else number
+        if match and total.strip().isdigit():
+            official = max(official, int(total.strip()))
+        if key in index:
+            continue        # le premier trouvé gagne, comme dans cards_of
+        rarity = fields.get("Rarity")
+        tier = riftbound_tier(product["name"], rarity)
+        index[key] = tier or "base"
+        if tier:
+            present.add(tier)
+        details[key] = {"n": re.sub(r"\s*\([^)]*\)", "", product["name"]).strip(),
+                        "r": rarity or "Common",
+                        "i": IMAGE.format(id=product["productId"])}
+    ordered = [t for t in RIFTBOUND_TIER_ORDER if t in present]
+    return {"index": index, "details": details, "cardCount": official,
             "main": ordered[:3], "more": ordered[3:]}
 
 
@@ -538,10 +600,16 @@ def main():
             # Classic de 30th Celebration porte le code de l'extension, mais
             # ses cartes gardent le numéro de leur set d'origine (« 4/102 »),
             # qui se confondrait avec celui de l'extension elle-même.
-            if (candidate and license == "pokemon" and not group.get("isSupplemental")
+            #
+            # Riftbound aussi : Riftcodex a saisi Vendetta trois semaines
+            # avant sa sortie, mais n'avait rien de Radiance à une semaine de
+            # la sienne, quand TCGplayer en avait déjà toutes les cartes.
+            if (candidate and license in ("pokemon", "riftbound")
+                    and not group.get("isSupplemental")
                     and pending.get(code) is candidate):
-                read = cards_of(products)
+                read = cards_of(products) if license == "pokemon" else riftbound_cards_of(products)
                 if read["index"]:
+                    read["license"] = license
                     pending_cards[code] = read
 
             items = {}

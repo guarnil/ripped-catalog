@@ -17,9 +17,10 @@ On y écrit :
   publiée ne peuvent donc pas diverger ;
 - les index de rareté, les empreintes de cartes, les fiches et les produits,
   copiés tels quels
-  depuis `Ripped/Resources/` — l'index Pokémon reçoit en plus les cartes des
-  extensions que TCGdex ne connaît pas encore, lues chez TCGplayer par
-  `generate_products.py` ;
+  depuis `Ripped/Resources/` — les index Pokémon et Riftbound reçoivent en
+  plus les cartes des extensions que TCGdex ou Riftcodex ne connaissent pas
+  encore, lues chez TCGplayer par `generate_products.py` (voir
+  `pending_extra`) ;
 - `manifest.json` : l'empreinte SHA-256 de chaque fichier. L'app ne retélécharge
   que ce qui a changé, et rejette un fichier dont l'empreinte ne correspond pas.
 
@@ -311,6 +312,63 @@ def resolve_pending(extensions, previous_renames):
     return provisional, renames, notes
 
 
+# Où vont les cartes lues chez TCGplayer : l'index de rareté de leur licence,
+# et ses fiches quand elle en a — celles de Pokémon sont demandées à TCGdex.
+INDEX_FILES = {"pokemon": "CardIndex.json", "riftbound": "CardIndexRiftbound.json"}
+DETAILS_FILES = {"riftbound": "RiftboundCards.json"}
+# L'ordre d'affichage des paliers Riftbound, comme dans generate_riftbound.py.
+RIFTBOUND_TIER_ORDER = ["epic", "altArt", "overnumbered", "signature"]
+
+
+def pending_extra(provisional, listed, renames):
+    """Les cartes que TCGplayer a saisies avant le catalogue de cartes, à
+    verser dans les fichiers publiés : fichier → code → numéro → valeur.
+
+    Elles ne sont pas dans les fichiers embarqués — ceux-ci ne connaissent que
+    le catalogue de cartes — mais la copie téléchargée les porte, et c'est
+    elle que l'app lit d'abord.
+
+    Une extension provisoire les reçoit toutes. Une extension Riftbound que
+    Riftcodex connaît les reçoit encore, mais pour les seuls numéros qui lui
+    manquent : il saisit une extension par vagues — Vendetta en six, sur onze
+    jours —, et passer d'un coup des 219 cartes de TCGplayer aux 103 de sa
+    première vague ferait refuser toute la publication par
+    `check_not_shrinking`. Sans compter les cartes qu'il ne saisit jamais :
+    les neuf signatures de Vendetta. Le relais cesse avec l'entrée de
+    `PendingExtensions.json`, 120 jours après la sortie.
+
+    Un palier que seules ces cartes apportent est ajouté à ceux de
+    l'extension : sans lui, l'app ne le proposerait pas à la saisie.
+    """
+    cards = pending_cards()
+    provisional_codes = {e["code"] for e in provisional}
+    by_code = {e["code"]: e for e in listed}
+    extra = {}
+    for source, read in sorted(cards.items()):
+        license = read.get("license", "pokemon")
+        code = renames.get(source, source)
+        entry = by_code.get(code)
+        if not entry or (code not in provisional_codes and license != "riftbound"):
+            continue
+        index_file = INDEX_FILES[license]
+        extra.setdefault(index_file, {})[code] = read["index"]
+        if license in DETAILS_FILES:
+            extra.setdefault(DETAILS_FILES[license], {})[code] = read.get("details", {})
+        if code in provisional_codes:
+            continue
+
+        with open(os.path.join(RESOURCES, index_file), encoding="utf-8") as f:
+            known = json.load(f).get(code, {})
+        added = {key: tier for key, tier in read["index"].items() if key not in known}
+        if not added:
+            continue
+        tiers = set(entry["main"] + entry["more"]) | (set(added.values()) - {"base"})
+        ordered = [t for t in RIFTBOUND_TIER_ORDER if t in tiers]
+        entry["main"], entry["more"] = ordered[:3], ordered[3:]
+        print(f"  · {code} : {len(added)} cartes que Riftcodex n'a pas, reprises de TCGplayer")
+    return extra
+
+
 def order_by_release(extensions):
     """La plus récente d'abord, licence par licence.
 
@@ -553,6 +611,8 @@ def main():
             print(f"  logo de {entry['code']} repris de la version publiée — "
                   f"la régénération ne l'a pas trouvé")
 
+    extra = pending_extra(provisional, listed, renames)
+
     # Une extension qui reçoit une Collection Classique doit proposer le
     # palier à la saisie : le catalogue de cartes, lui, ne connaît pas ces
     # réimpressions — elles forment un set à part chez TCGdex, écarté exprès.
@@ -567,17 +627,10 @@ def main():
                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     hashes = {"extensions.json": write("extensions.json", payload)}
 
-    # Les cartes que TCGplayer a saisies avant TCGdex : elles ne sont pas dans
-    # l'index embarqué — celui-ci ne connaît que le catalogue de cartes — mais
-    # la copie téléchargée les porte, et c'est elle que l'app lit d'abord.
-    cards = pending_cards()
-    extra = {e["code"]: cards[e["code"]]["index"]
-             for e in provisional if e["code"] in cards}
-
     # Les Collections Classiques rejoignent l'index de leur extension
     # d'accueil, provisoire ou non.
     for code, index in classic_cards().items():
-        extra.setdefault(code, {}).update(index)
+        extra.setdefault("CardIndex.json", {}).setdefault(code, {}).update(index)
 
     for name in COPIED + PUBLISHED_ONLY:
         source = os.path.join(CONFIG if name in PUBLISHED_ONLY else RESOURCES, name)
@@ -587,13 +640,16 @@ def main():
         with open(source, "rb") as f:
             data = f.read()
         table = json.loads(data)  # un fichier illisible ne part pas
-        if name == "CardIndex.json" and extra:
-            for code, index in extra.items():
-                table.setdefault(code, {}).update(index)
+        # Un numéro déjà connu du catalogue de cartes garde sa valeur : les
+        # cartes TCGplayer ne font que combler ses trous.
+        for code, entries in extra.get(name, {}).items():
+            known = table.setdefault(code, {})
+            for key, value in entries.items():
+                known.setdefault(key, value)
         # Les produits d'une extension provisoire suivent son renommage.
         if renames:
             table = apply_renames(table, renames)
-        if renames or (name == "CardIndex.json" and extra):
+        if renames or name in extra:
             data = json.dumps(table, ensure_ascii=False, separators=(",", ":"),
                               sort_keys=True).encode("utf-8")
         check_not_shrinking(name, table, renames)
@@ -612,7 +668,7 @@ def main():
 
     print(f"{len(series)} séries, {len(listed)} extensions "
           f"(dont {len(provisional)} en attente de cartes, "
-          f"{len(extra)} déjà scannables), "
+          f"{sum(1 for e in provisional if e['code'] in pending_cards())} déjà scannables), "
           f"{len(renames)} renommages, {len(hashes)} fichiers prêts dans {os.path.basename(SITE) or SITE}.")
 
     if args.push:
