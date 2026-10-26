@@ -74,6 +74,9 @@ CLASSIC_CARDS = "ClassicCards.json"
 # l'héberger toi-même, c'est la rediffuser.
 PENDING_LOGOS = {
     # "30C": "https://exemple.invalid/30e-anniversaire.png",
+    # Le sachet de la boutique Riot, cadré comme dans `PACK_ART` de
+    # generate_riftbound.py, qui le reprendra une fois Radiance cataloguée.
+    "RAD": "https://cdn.sanity.io/images/dsfx7636/consumer_products_live/2cad464988d322563ae71a6b28c765e5c54d32ec-2560x2560.png?rect=1714,886,752,1222&w=400&fm=png",
 }
 
 # La racine servie par GitHub Pages, pour les logos déposés dans le dépôt.

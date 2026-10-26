@@ -97,6 +97,7 @@ PACK_ART = {
     "SFD": f"{SHOP}/84d112ee2796307fd629bf7f603914e5e86ca337-2560x2560.png?rect=624,168,1316,2224&w=400&fm=png",
     "UNL": f"{SHOP}/aa46ce39877fd9798ad45022c5ebc753f9d4e374-2560x2560.png?rect=1710,780,720,1202&w=400&fm=png",
     "VEN": f"{SHOP}/e0a08c2f8d9e931a799617aaf74cb1f89a71e148-2560x2560.png?rect=1720,950,734,1210&w=400&fm=png",
+    "RAD": f"{SHOP}/2cad464988d322563ae71a6b28c765e5c54d32ec-2560x2560.png?rect=1714,886,752,1222&w=400&fm=png",
 }
 
 # Le visuel du CDN de Riot fait 744 × 1039 en PNG, 1,4 Mo. Redimensionné et
